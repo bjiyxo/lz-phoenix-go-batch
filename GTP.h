@@ -32,7 +32,6 @@
 extern bool cfg_gtp_mode;
 extern bool cfg_allow_pondering;
 extern int cfg_num_threads;
-extern int cfg_max_threads;
 extern int cfg_max_playouts;
 extern int cfg_max_visits;
 extern size_t cfg_max_memory;
@@ -51,6 +50,7 @@ extern bool cfg_dumbpass;
 extern std::vector<int> cfg_gpus;
 extern bool cfg_sgemm_exhaustive;
 extern bool cfg_tune_only;
+extern int cfg_batch_size;
 #ifdef USE_HALF
 enum class precision_t {
     AUTO, SINGLE, HALF
@@ -61,7 +61,6 @@ extern precision_t cfg_precision;
 extern float cfg_puct;
 extern float cfg_softmax_temp;
 extern float cfg_fpu_reduction;
-extern float cfg_fpu_root_reduction;
 extern std::string cfg_logfile;
 extern std::string cfg_weightsfile;
 extern FILE* cfg_logfile_handle;
@@ -82,7 +81,8 @@ class GTP {
 public:
     static std::unique_ptr<Network> s_network;
     static void initialize(std::unique_ptr<Network>&& network);
-    static void execute(GameState & game, const std::string& xinput);
+    static bool execute(GameState & game, const std::string& xinput);
+    static bool execute_setoption(int id, const std::string& command);
     static void setup_default_parameters();
 private:
     static constexpr int GTP_VERSION = 2;
@@ -94,8 +94,6 @@ private:
         std::istringstream& is);
     static std::pair<bool, std::string> set_max_memory(
         size_t max_memory, int cache_size_ratio_percent);
-    static void execute_setoption(UCTSearch& search,
-                                  int id, const std::string& command);
 
     // Memory estimation helpers
     static size_t get_base_memory();

@@ -78,25 +78,15 @@ using ConstEigenMatrixMap =
     Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>>;
 #endif
 
-// Symmetry helper
-static std::array<std::array<int, NUM_INTERSECTIONS>,
-                  Network::NUM_SYMMETRIES> symmetry_nn_idx_table;
-
 float Network::benchmark_time(int centiseconds) {
     const auto cpus = cfg_num_threads;
+    const Time start;
 
     ThreadGroup tg(thread_pool);
     std::atomic<int> runcount{0};
 
     GameState state;
     state.init_game(BOARD_SIZE, 7.5);
-
-    // As a sanity run, try one run with self check.
-    // Isn't enough to guarantee correctness but better than nothing,
-    // plus for large nets self-check takes a while (1~3 eval per second)
-    get_output(&state, Ensemble::RANDOM_SYMMETRY, -1, true, true);
-
-    const Time start;
     for (auto i = 0; i < cpus; i++) {
         tg.add_task([this, &runcount, start, centiseconds, state]() {
             while (true) {
@@ -386,21 +376,11 @@ void Network::select_precision(int channels) {
 
         myprintf("Initializing OpenCL (autodetecting precision).\n");
 
-        // Setup fp16 here so that we can see if we can skip autodetect.
-        // However, if fp16 sanity check fails we will return a fp32 and pray it works.
+        // Setup fp16 here so that we can see if we can skip autodetect
         auto fp16_net = std::make_unique<OpenCLScheduler<half_float::half>>();
         if (!fp16_net->needs_autodetect()) {
-            try {
-                myprintf("OpenCL: using fp16/half compute support.\n");
-                m_forward = init_net(channels, std::move(fp16_net));
-                benchmark_time(1); // a sanity check run
-            } catch (...) {
-                myprintf("OpenCL: fp16/half failed despite driver claiming support.\n");
-                myprintf("Falling back to single precision\n");
-                m_forward.reset();
-                m_forward = init_net(channels,
-                    std::make_unique<OpenCLScheduler<float>>());
-            }
+            myprintf("OpenCL: using fp16/half compute support.\n");
+            m_forward = init_net(channels, std::move(fp16_net));
             return;
         }
 
@@ -478,10 +458,7 @@ void Network::initialize(int playouts, const std::string & weightsfile) {
 
     m_fwd_weights = std::make_shared<ForwardPipeWeights>();
 
-    // Make a guess at a good size as long as the user doesn't
-    // explicitly set a maximum memory usage.
     m_nncache.set_size_from_playouts(playouts);
-
     // Prepare symmetry table
     for (auto s = 0; s < NUM_SYMMETRIES; ++s) {
         for (auto v = 0; v < NUM_INTERSECTIONS; ++v) {
@@ -540,16 +517,14 @@ void Network::initialize(int playouts, const std::string & weightsfile) {
         m_fwd_weights->m_conv_pol_b[i] = 0.0f;
     }
 
+    bool use_selfcheck = true;
 #ifdef USE_OPENCL
     if (cfg_cpu_only) {
         myprintf("Initializing CPU-only evaluation.\n");
         m_forward = init_net(channels, std::make_unique<CPUPipe>());
+
+        use_selfcheck = false;
     } else {
-#ifdef USE_OPENCL_SELFCHECK
-        // initialize CPU reference first, so that we can self-check
-        // when doing fp16 vs. fp32 detections
-        m_forward_cpu = init_net(channels, std::make_unique<CPUPipe>());
-#endif
 #ifdef USE_HALF
         // HALF support is enabled, and we are using the GPU.
         // Select the precision to use at runtime.
@@ -564,8 +539,16 @@ void Network::initialize(int playouts, const std::string & weightsfile) {
 #else //!USE_OPENCL
     myprintf("Initializing CPU-only evaluation.\n");
     m_forward = init_net(channels, std::make_unique<CPUPipe>());
+    use_selfcheck = false;
 #endif
 
+#ifdef USE_OPENCL_SELFCHECK
+    if (use_selfcheck) {
+        m_forward_cpu = init_net(channels, std::make_unique<CPUPipe>());
+    }
+#else
+    (void)use_selfcheck;
+#endif
     // Need to estimate size before clearing up the pipe.
     get_estimated_size();
     m_fwd_weights.reset();
@@ -684,6 +667,7 @@ std::vector<float> softmax(const std::vector<float>& input,
     return output;
 }
 
+/*
 bool Network::probe_cache(const GameState* const state,
                           Network::Netresult& result) {
     if (m_nncache.lookup(state->board.get_hash(), result)) {
@@ -713,21 +697,115 @@ bool Network::probe_cache(const GameState* const state,
 
     return false;
 }
+*/
+
+std::pair<Netresult_ptr, int> Network::probe_cache0(const GameState* const state) {
+
+    for (auto sym = 0; sym < Network::NUM_SYMMETRIES; ++sym) {
+        if (sym == Network::IDENTITY_SYMMETRY) {
+            continue;
+        }
+        const auto hash = state->get_symmetry_hash(sym);
+        auto result = m_nncache.lookup_and_insert(hash, false);
+        if (result) {
+            return std::pair<Netresult_ptr, int>(result, sym);
+        }
+    }
+    return std::pair<Netresult_ptr, int>(nullptr, Network::IDENTITY_SYMMETRY);
+}
+
+std::pair<Netresult_ptr, int> Network::get_output0(
+    const GameState* const state, const Ensemble ensemble,
+    const int symmetry, const bool skip_cache) {
+
+    std::pair<Netresult_ptr, int> result_sym;
+    if (state->board.get_boardsize() != BOARD_SIZE) {
+        return result_sym;
+    }
+
+    std::unique_lock<std::mutex> lock(m_nncache.m_mutex);
+    if (!skip_cache) {
+        // If we are not generating a self-play game, try to find
+        // symmetries if we are in the early opening.
+        if (!cfg_noise && !cfg_random_cnt
+            && state->get_movenum()
+            < (state->get_timecontrol().opening_moves(BOARD_SIZE) / 2)) {
+            // See if we already have this in the cache.
+            result_sym = probe_cache0(state);
+        }
+    }
+    if (result_sym.first) {
+        return result_sym;
+    }
+    else {
+        result_sym = std::pair<Netresult_ptr, int>(m_nncache.lookup_and_insert(state->board.get_hash(), 
+                                                     true, !skip_cache),
+                                                   Network::IDENTITY_SYMMETRY);
+    }
+    lock.unlock();
+
+    if (result_sym.first->forwarded.load()) {
+        return result_sym;
+    }
+    if (ensemble == DIRECT) {
+        assert(symmetry >= 0 && symmetry < NUM_SYMMETRIES);
+        m_forward->forward0(std::make_unique<const std::vector<float>>(gather_features(state, symmetry)),
+                            state->get_to_move(), symmetry, result_sym.first);
+    }
+    else if (ensemble == AVERAGE) {
+        /*
+        for (auto sym = 0; sym < NUM_SYMMETRIES; ++sym) {
+            auto tmpresult = get_output_internal(state, sym);
+            result.winrate +=
+                tmpresult.winrate / static_cast<float>(NUM_SYMMETRIES);
+            result.policy_pass +=
+                tmpresult.policy_pass / static_cast<float>(NUM_SYMMETRIES);
+
+            for (auto idx = size_t{ 0 }; idx < NUM_INTERSECTIONS; idx++) {
+                result.policy[idx] +=
+                    tmpresult.policy[idx] / static_cast<float>(NUM_SYMMETRIES);
+            }
+        }
+        */
+    }
+    else {
+        assert(ensemble == RANDOM_SYMMETRY);
+        assert(symmetry == -1);
+        const auto rand_sym = Random::get_Rng().randfix<NUM_SYMMETRIES>();
+        m_forward->forward0(std::make_unique<const std::vector<float>>(gather_features(state, rand_sym)),
+                            state->get_to_move(), rand_sym, result_sym.first);
+#ifdef USE_OPENCL_SELFCHECK
+        // Both implementations are available, self-check the OpenCL driver by
+        // running both with a probability of 1/2000.
+        // selfcheck is done here because this is the only place NN
+        // evaluation is done on actual gameplay.
+        if (m_forward_cpu != nullptr
+            && Random::get_Rng().randfix<SELFCHECK_PROBABILITY>() == 0) {
+            auto result_ref = get_output_internal(state, rand_sym, true);
+            compare_net_outputs(result, result_ref);
+        }
+#endif
+    }
+    result_sym.first->forwarded.store(true);
+    return result_sym;
+}
 
 Network::Netresult Network::get_output(
     const GameState* const state, const Ensemble ensemble,
-    const int symmetry, const bool skip_cache, const bool force_selfcheck) {
+    const int symmetry, const bool skip_cache) {
     Netresult result;
     if (state->board.get_boardsize() != BOARD_SIZE) {
         return result;
     }
 
+    /*
     if (!skip_cache) {
         // See if we already have this in the cache.
         if (probe_cache(state, result)) {
             return result;
         }
     }
+    */
 
     if (ensemble == DIRECT) {
         assert(symmetry >= 0 && symmetry < NUM_SYMMETRIES);
@@ -756,13 +834,10 @@ Network::Netresult Network::get_output(
         // selfcheck is done here because this is the only place NN
         // evaluation is done on actual gameplay.
         if (m_forward_cpu != nullptr
-            && (force_selfcheck || Random::get_Rng().randfix<SELFCHECK_PROBABILITY>() == 0)
-        ) {
+            && Random::get_Rng().randfix<SELFCHECK_PROBABILITY>() == 0) {
             auto result_ref = get_output_internal(state, rand_sym, true);
             compare_net_outputs(result, result_ref);
         }
-#else
-        (void)force_selfcheck;
 #endif
     }
 
@@ -774,9 +849,78 @@ Network::Netresult Network::get_output(
     }
 
     // Insert result into cache.
-    m_nncache.insert(state->board.get_hash(), result);
+    // m_nncache.insert(state->board.get_hash(), result);
 
     return result;
+}
+
+/*
+void Network::get_output_internal0(
+    const GameState* const state, const int symmetry, Netresult_ptr result, bool selfcheck) {
+
+    assert(symmetry >= 0 && symmetry < NUM_SYMMETRIES);
+    //constexpr auto width = BOARD_SIZE;
+    //constexpr auto height = BOARD_SIZE;
+
+    // auto input_data = std::make_unique<const std::vector<float>>(gather_features(state, symmetry));
+    // std::vector<float> policy_data(OUTPUTS_POLICY * width * height);
+    // std::vector<float> value_data(OUTPUTS_VALUE * width * height);
+#ifdef USE_OPENCL_SELFCHECK
+    if (selfcheck) {
+        m_forward_cpu->forward(input_data, policy_data, value_data);
+    }
+    else {
+        m_forward->forward(input_data, policy_data, value_data);
+    }
+#else
+    m_forward->forward0(std::make_unique<const std::vector<float>>(gather_features(state, symmetry)), 
+                        state->get_to_move(), symmetry, result);
+    (void)selfcheck;
+#endif
+}
+*/
+
+void Network::process_output(
+    std::vector<float>& policy_data,
+    std::vector<float>& value_data,
+    const int tomove,
+    const int symmetry,
+    Netresult_ptr result) {
+    // Get the moves
+    batchnorm<NUM_INTERSECTIONS>(OUTPUTS_POLICY, policy_data,
+        m_bn_pol_w1.data(), m_bn_pol_w2.data());
+    const auto policy_out =
+        innerproduct<OUTPUTS_POLICY * NUM_INTERSECTIONS, POTENTIAL_MOVES, false>(
+            policy_data, m_ip_pol_w, m_ip_pol_b);
+    const auto outputs = softmax(policy_out, cfg_softmax_temp);
+
+    // Now get the value
+    batchnorm<NUM_INTERSECTIONS>(OUTPUTS_VALUE, value_data,
+        m_bn_val_w1.data(), m_bn_val_w2.data());
+    const auto winrate_data =
+        innerproduct<OUTPUTS_VALUE * NUM_INTERSECTIONS, VALUE_LAYER, true>(
+            value_data, m_ip1_val_w, m_ip1_val_b);
+    const auto winrate_out =
+        innerproduct<VALUE_LAYER, 1, false>(winrate_data, m_ip2_val_w, m_ip2_val_b);
+
+    // Map TanH output range [-1..1] to [0..1] range
+    auto winrate = (1.0f + std::tanh(winrate_out[0])) / 2.0f;
+
+    for (auto idx = size_t{ 0 }; idx < NUM_INTERSECTIONS; idx++) {
+        const auto sym_idx = symmetry_nn_idx_table[symmetry][idx];
+        result->result.policy[sym_idx] = outputs[idx];
+    }
+
+    // v2 format (ELF Open Go) returns black value, not stm
+    if (m_value_head_not_stm) {
+        if (tomove == FastBoard::WHITE) {
+            winrate = 1.0f - winrate;
+        }
+    }
+
+    result->result.policy_pass = outputs[NUM_INTERSECTIONS];
+    result->result.winrate = winrate;
+    result->ready.store(true);
 }
 
 Network::Netresult Network::get_output_internal(

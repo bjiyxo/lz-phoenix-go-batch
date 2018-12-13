@@ -468,16 +468,16 @@ std::string Tuner<net_t>::tune_sgemm(const int m, const int n, const int k,
     }
     if (best_time == 0) {
         if (failed_compile > 0) {
-            myprintf_error("Failed to compile: %d kernels.\n", failed_compile);
+            printf("Failed to compile: %d kernels.\n", failed_compile);
         }
         if (failed_enqueue > 0) {
-            myprintf_error("Failed to enqueue: %d kernels\n", failed_enqueue);
+            printf("Failed to enqueue: %d kernels\n", failed_enqueue);
         }
         if (failed_error > 0) {
-            myprintf_error("Too high error: %d kernels\n", failed_error);
+            printf("Too high error: %d kernels\n", failed_error);
         }
-        myprintf_error("Failed to find a working configuration.\nCheck your OpenCL drivers.\n");
-        myprintf_error("Minimum error: %f. Error bound: %f\n", min_error, getTunerMaxError<net_t>());
+        printf("Failed to find a working configuration.\nCheck your OpenCL drivers.\n");
+        printf("Minimum error: %f. Error bound: %f\n", min_error, getTunerMaxError<net_t>());
         throw std::runtime_error("Tuner failed to find working configuration.");
     }
     return best_params;

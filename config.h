@@ -90,11 +90,6 @@ static constexpr auto POTENTIAL_MOVES = NUM_INTERSECTIONS + 1; // including pass
 
 #endif
 
-/* Maximum supported batch size for OpenCL.
- */
-static constexpr auto MAX_BATCH = 1;
-static_assert(MAX_BATCH == 1, "MAX_BATCH != 1 not implemented");
-
 /*
  * USE_TUNER: Expose some extra command line parameters that allow tuning the
  * search algorithm.
@@ -102,7 +97,7 @@ static_assert(MAX_BATCH == 1, "MAX_BATCH != 1 not implemented");
 //#define USE_TUNER
 
 static constexpr auto PROGRAM_NAME = "Leela Zero";
-static constexpr auto PROGRAM_VERSION = "0.16";
+static constexpr auto PROGRAM_VERSION = "0.15";
 
 /*
  * OpenBLAS limitation: the default configuration on some Linuxes
@@ -118,9 +113,9 @@ static constexpr auto MAX_CPUS = 256;
 #include "half/half.hpp"
 #endif
 
-#ifdef USE_OPENCL
-// If OpenCL are fully usable, then check the OpenCL against CPU
-// implementation with some probability.
+#if defined(USE_BLAS) && defined(USE_OPENCL)
+// If both BLAS and OpenCL are fully usable, then check the OpenCL
+// results against BLAS with some probability.
 #define USE_OPENCL_SELFCHECK
 static constexpr auto SELFCHECK_PROBABILITY = 2000;
 #endif
