@@ -66,7 +66,8 @@ public:
     Netresult get_output(const GameState* const state,
         const Ensemble ensemble,
         const int symmetry = -1,
-        const bool skip_cache = false);
+        const bool skip_cache = false,
+        const bool force_selfcheck = false);
     std::pair<Netresult_ptr, int> get_output0(const GameState* const state,
                          const Ensemble ensemble,
                          const int symmetry = -1,
@@ -96,7 +97,11 @@ public:
     size_t get_estimated_cache_size();
     void nncache_resize(int max_count);
     void nncache_dump_stats() { m_nncache.dump_stats(); }
+    void nncache_clear();
+
     void set_search(UCTSearch* search) { m_forward->m_search = search; m_forward->m_network = this; }
+    std::mutex& get_queue_mutex() { return m_forward->m_mutex; }
+    void notify() { m_forward->m_cv0.notify_all(); }
     void process_output(std::vector<float>& policy_data,
         std::vector<float>& value_data,
         const int tomove,
@@ -140,7 +145,7 @@ private:
                                       std::vector<float>::iterator white,
                                       const int symmetry);
     // bool probe_cache(const GameState* const state, Network::Netresult& result);
-    std::pair<Netresult_ptr, int> Network::probe_cache0(const GameState* const state);
+    std::pair<Netresult_ptr, int> probe_cache0(const GameState* const state);
     std::unique_ptr<ForwardPipe>&& init_net(int channels,
                                             std::unique_ptr<ForwardPipe>&& pipe);
 #ifdef USE_HALF
@@ -181,14 +186,4 @@ private:
     std::array<float, 1> m_ip2_val_b;
     bool m_value_head_not_stm;
 };
-
-/*
-struct NetReturnData {
-    std::mutex m_mutex;
-    Netresult_ptr result;
-    int tomove;
-    int symmetry;
-    std::vector<BackupData> bd;
-};
-*/
 #endif

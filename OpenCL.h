@@ -30,6 +30,7 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <condition_variable>
 #include <cassert>
 
 #include "Tuner.h"
@@ -73,6 +74,8 @@ private:
 template <typename net_t>
 class OpenCL_Network {
 public:
+    std::atomic<int> m_occupied{0};
+    std::atomic<int> idle_count{0};
     OpenCL_Network(OpenCL<net_t> & opencl) : m_opencl(opencl) {}
     OpenCL<net_t> & getOpenCL() {
         return m_opencl;
@@ -134,10 +137,11 @@ public:
         return m_layers.size();
     }
 
-    void forward(const std::vector<float>& input,
+    void forward(const std::vector<net_t>& input,
             std::vector<float>& output_pol,
             std::vector<float>& output_val,
             OpenCLContext & opencl_context,
+            std::condition_variable& cv,
             const int batch_size = 1);
 
 private:
@@ -174,6 +178,7 @@ private:
     // because queue.finish() is a busy wait and having a lot of threads
     // waiting here is counterproductive CPU-wise.  At least std::mutex
     // isn't busy wait so it should be better.
+    std::mutex m_enqueue_mutex;
     std::mutex m_queue_finish_mutex;
     std::vector<Layer> m_layers;
 };
@@ -205,13 +210,16 @@ private:
     struct sgemm_tuners {
         size_t mwg, nwg, kwg;
         size_t vwm, vwn;
+        size_t mdima, ndimb;
         size_t mdimc, ndimc;
+        size_t tce;
     };
     sgemm_tuners m_sgemm_tuners;
     size_t m_wavefront_size{0};
     size_t m_max_workgroup_size{0};
     std::vector<size_t> m_max_workgroup_dims;
     bool m_fp16_compute{false};
+    bool m_tensorcore{false};
     bool m_init_ok{false};
 };
 

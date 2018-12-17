@@ -80,13 +80,13 @@ public:
                               unsigned int outputs,
                               std::shared_ptr<const ForwardPipeWeights> weights);
 private:
-    bool m_running = true;
+    std::atomic<bool> m_running{true};
     std::vector<std::unique_ptr<OpenCL_Network<net_t>>> m_networks;
     std::vector<std::unique_ptr<OpenCL<net_t>>> m_opencl;
 
-    std::mutex m_mutex;
+    //std::mutex m_mutex;
     std::condition_variable m_cv;
-    std::condition_variable m_cv0;
+    //std::condition_variable m_cv0;
 
     // start with 10 milliseconds : lock protected
     int m_waittime{10};
@@ -96,11 +96,13 @@ private:
 
     std::list<std::shared_ptr<ForwardQueueEntry>> m_forward_queue;
     std::list<std::unique_ptr<ForwardQueueEntry0>> m_forward_queue0;
+    std::atomic<int> m_max_queue_size;
 
     std::list<std::thread> m_worker_threads;
     std::vector<std::atomic<int>*> batch_stats;
+    std::vector<std::atomic<int>*> pickup_stats;
 
-    void batch_worker(const size_t gnum);
+    void batch_worker(const size_t gnum, const size_t i);
     void push_input_convolution(unsigned int filter_size,
                                 unsigned int channels,
                                 unsigned int outputs,
