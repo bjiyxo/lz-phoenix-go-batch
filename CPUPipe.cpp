@@ -67,7 +67,6 @@ void CPUPipe::winograd_transform_in(const std::vector<float>& in,
     auto buffer_offset = 0;
     auto buffer_entries = 0;
 
-
     // multiple vector [i0..i5] by Bt and produce [o0..o5]
     // const auto Bt = std::array<float, WINOGRAD_TILE>
     //           {1.0f,  0.0f,     -5.0f/2.0f,  0.0f,      1.0f, 0.0f,
@@ -82,17 +81,13 @@ void CPUPipe::winograd_transform_in(const std::vector<float>& in,
     ) {
         auto i3m1 = i1 * -SQ2 + i3 * (SQ2 / 2.0f);
         auto i4m2 = i2 * -2.0f + i4 * 1.0f;
-
         o0 = i0 + i2 * (-5.0f/2.0f) + i4;
         o1 = i3m1 + i4m2;
         o2 = -i3m1 + i4m2;
-
         auto i3m1_2 = i3 * (SQ2) + i1 * (-SQ2/2.0f);
         auto i4m2_2 = i2 * (-1.0f/2.0f) + i4;
-
         o3 = i3m1_2 + i4m2_2;
         o4 = -i3m1_2 + i4m2_2;
-
         o5 = i1 + i3 * (-5.0f/2.0f) + i5;
     };
 
@@ -220,7 +215,6 @@ void CPUPipe::winograd_transform_out(const std::vector<float>& M,
         auto t1m2 = (i1 - i2) * (SQ2/4.0f);
         auto t3p4 = i3 + i4;
         auto t3m4 = (i3 - i4) * (SQ2);
-
         o0 = i0 + t1p2 + t1p2 + t3p4;
         o1 = t1m2 + t1m2 + t3m4;
         o2 = t1p2 + t3p4 + t3p4;
@@ -243,11 +237,12 @@ void CPUPipe::winograd_transform_out(const std::vector<float>& M,
                             M[(xi*WINOGRAD_ALPHA + nu)*K*P + k*P + b];
                     }
                 }
+
                 std::array<std::array<float, WINOGRAD_ALPHA>, WINOGRAD_M> temp;
                 std::array<std::array<float, WINOGRAD_M>, WINOGRAD_M> o;
 
                 // Calculates transpose(A).temp_m.A
-                for (auto j = 0; j < WINOGRAD_ALPHA; j++){
+		for (auto j = 0; j < WINOGRAD_ALPHA; j++){
                     multiply_at(
                         temp[0][j], temp[1][j], temp[2][j], temp[3][j],
                         temp_m[0][j], temp_m[1][j], temp_m[2][j], temp_m[3][j], temp_m[4][j], temp_m[5][j]
@@ -255,7 +250,7 @@ void CPUPipe::winograd_transform_out(const std::vector<float>& M,
                 }
 
                 for (auto i = 0; i < WINOGRAD_M; i++){
-                    multiply_at(
+		    multiply_at(
                         o[i][0], o[i][1], o[i][2], o[i][3],
                         temp[i][0], temp[i][1], temp[i][2], temp[i][3], temp[i][4], temp[i][5]
                     );
@@ -291,16 +286,16 @@ void CPUPipe::winograd_convolve3(const int outputs,
 
 template<unsigned int filter_size>
 void convolve(const size_t outputs,
+              const size_t biases_size,
               const std::vector<float>& input,
               const std::vector<float>& weights,
-              const std::vector<float>& biases,
               std::vector<float>& output) {
     // The size of the board is defined at compile time
     constexpr unsigned int width = BOARD_SIZE;
     constexpr unsigned int height = BOARD_SIZE;
     constexpr auto num_intersections = width * height;
     constexpr auto filter_len = filter_size * filter_size;
-    const auto input_channels = weights.size() / (biases.size() * filter_len);
+    const auto input_channels = weights.size() / (biases_size * filter_len);
     const auto filter_dim = filter_len * input_channels;
     assert(outputs * num_intersections == output.size());
 
@@ -333,11 +328,12 @@ void convolve(const size_t outputs,
         * ConstEigenMatrixMap<float>(weights.data(), filter_dim, outputs);
 #endif
 
+    /*
     for (unsigned int o = 0; o < outputs; o++) {
         for (unsigned int b = 0; b < num_intersections; b++) {
             output[(o * num_intersections) + b] += biases[o];
         }
-    }
+    }*/
 }
 
 template <size_t spatial_size>
@@ -345,25 +341,42 @@ void batchnorm(const size_t channels,
                std::vector<float>& data,
                const float* const means,
                const float* const stddevs,
+               const float* const gammas,
+               const float* const betas,
                const float* const eltwise = nullptr) {
     const auto lambda_ReLU = [](const auto val) { return (val > 0.0f) ?
                                                           val : 0.0f; };
     for (auto c = size_t{0}; c < channels; ++c) {
         const auto mean = means[c];
         const auto scale_stddev = stddevs[c];
+        const auto gamma = gammas[c];
+        const auto beta = betas[c];
         const auto arr = &data[c * spatial_size];
 
         if (eltwise == nullptr) {
             // Classical BN
             for (auto b = size_t{0}; b < spatial_size; b++) {
-                arr[b] = lambda_ReLU(scale_stddev * (arr[b] - mean));
+                arr[b] = lambda_ReLU(scale_stddev * (arr[b] - mean) * gamma + beta);
             }
         } else {
             // BN + residual add
             const auto res = &eltwise[c * spatial_size];
             for (auto b = size_t{0}; b < spatial_size; b++) {
-                arr[b] = lambda_ReLU((scale_stddev * (arr[b] - mean)) + res[b]);
+                arr[b] = lambda_ReLU((scale_stddev * (arr[b] - mean) * gamma + beta) + res[b]);
             }
+        }
+    }
+}
+
+template <size_t spatial_size>
+void add_bias(const size_t channels,
+             std::vector<float>& data,
+             const float* const bias)
+{
+    for (auto c = size_t{0}; c < channels; ++c) {
+        const auto arr = &data[c * spatial_size];
+        for (auto b = size_t{0}; b < spatial_size; b++) {
+            arr[b] += bias[c];
         }
     }
 }
@@ -391,9 +404,7 @@ void CPUPipe::forward(const std::vector<float>& input,
     auto M = std::vector<float>(WINOGRAD_TILE * output_channels * P);
 
     winograd_convolve3(output_channels, input, m_weights->m_conv_weights[0], V, M, conv_out);
-    batchnorm<NUM_INTERSECTIONS>(output_channels, conv_out,
-                                 m_weights->m_batchnorm_means[0].data(),
-                                 m_weights->m_batchnorm_stddevs[0].data());
+    add_bias<NUM_INTERSECTIONS>(output_channels, conv_out, m_weights->m_conv_biases[0].data());
 
     // Residual tower
     auto conv_in = std::vector<float>(output_channels * NUM_INTERSECTIONS);
@@ -401,23 +412,39 @@ void CPUPipe::forward(const std::vector<float>& input,
     for (auto i = size_t{1}; i < m_weights->m_conv_weights.size(); i += 2) {
         auto output_channels = m_input_channels;
         std::swap(conv_out, conv_in);
+        res = conv_in;
+        batchnorm<NUM_INTERSECTIONS>(output_channels, conv_in,
+                                     m_weights->m_batchnorm_means[i - 1].data(),
+                                     m_weights->m_batchnorm_stddevs[i - 1].data(),
+                                     m_weights->m_batchnorm_gammas[i - 1].data(),
+                                     m_weights->m_batchnorm_betas[i - 1].data());
         winograd_convolve3(output_channels, conv_in,
                            m_weights->m_conv_weights[i], V, M, conv_out);
-        batchnorm<NUM_INTERSECTIONS>(output_channels, conv_out,
-                                     m_weights->m_batchnorm_means[i].data(),
-                                     m_weights->m_batchnorm_stddevs[i].data());
+        add_bias<NUM_INTERSECTIONS>(output_channels, conv_out, m_weights->m_conv_biases[i].data());
 
-        std::swap(conv_in, res);
         std::swap(conv_out, conv_in);
+        batchnorm<NUM_INTERSECTIONS>(output_channels, conv_in,
+                                     m_weights->m_batchnorm_means[i].data(),
+                                     m_weights->m_batchnorm_stddevs[i].data(),
+                                     m_weights->m_batchnorm_gammas[i].data(),
+                                     m_weights->m_batchnorm_betas[i].data());
+									 
         winograd_convolve3(output_channels, conv_in,
                            m_weights->m_conv_weights[i + 1], V, M, conv_out);
-        batchnorm<NUM_INTERSECTIONS>(output_channels, conv_out,
-                                     m_weights->m_batchnorm_means[i + 1].data(),
-                                     m_weights->m_batchnorm_stddevs[i + 1].data(),
-                                     res.data());
+        add_bias<NUM_INTERSECTIONS>(output_channels, conv_out, m_weights->m_conv_biases[i + 1].data());
+
+        for (auto k = size_t{0}; k < conv_out.size(); ++k)
+            conv_out[k] += res[k];
     }
-    convolve<1>(Network::OUTPUTS_POLICY, conv_out, m_conv_pol_w, m_conv_pol_b, output_pol);
-    convolve<1>(Network::OUTPUTS_VALUE, conv_out, m_conv_val_w, m_conv_val_b, output_val);
+
+    batchnorm<NUM_INTERSECTIONS>(output_channels, conv_out,
+                                 m_weights->m_batchnorm_means.back().data(),
+                                 m_weights->m_batchnorm_stddevs.back().data(),
+                                 m_weights->m_batchnorm_gammas.back().data(),
+                                 m_weights->m_batchnorm_betas.back().data());
+
+    convolve<1>(Network::OUTPUTS_POLICY, m_conv_pol_b.size(), conv_out, m_conv_pol_w, output_pol);
+    convolve<1>(Network::OUTPUTS_VALUE, m_conv_val_b.size(), conv_out, m_conv_val_w, output_val);
 }
 
 void CPUPipe::push_weights(unsigned int /*filter_size*/,

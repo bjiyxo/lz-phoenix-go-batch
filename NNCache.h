@@ -78,16 +78,14 @@ public:
         std::atomic<bool> forwarded{false};
         Netresult result;  // ~ 1.4KiB
     };
-
     static constexpr size_t ENTRY_SIZE =
         sizeof(Entry)
         + sizeof(std::uint64_t)
         + sizeof(std::shared_ptr<Entry>);
-
     std::shared_ptr<Entry> lookup_and_insert(std::uint64_t hash, bool insert, bool lookup = true);
     std::mutex m_mutex;
 private:
-    
+
     size_t m_size;
 
     // Statistics
@@ -100,7 +98,6 @@ private:
     // Order entries were added to the map.
     std::deque<size_t> m_order;
 };
-
 using Netresult_ptr = std::shared_ptr<NNCache::Entry>;
 
 #endif

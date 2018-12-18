@@ -33,7 +33,6 @@ NNCache::NNCache(int size) : m_size(size) {}
 
 std::shared_ptr<NNCache::Entry> NNCache::lookup_and_insert(std::uint64_t hash, bool insert, bool lookup) {
     // !lookup implies insert
-
     if (lookup) {
         ++m_lookups;
         auto iter = m_cache.find(hash);
@@ -42,7 +41,6 @@ std::shared_ptr<NNCache::Entry> NNCache::lookup_and_insert(std::uint64_t hash, b
             return iter->second;
         }
     }
-
     // skip-cache or not found
     if (insert) {
         // If the cache is too large, remove the oldest entry.

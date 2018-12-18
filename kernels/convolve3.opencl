@@ -24,11 +24,9 @@ R"(
 #ifndef OUTIN_KWG
 #define OUTIN_KWG 2
 #endif
-
 #ifndef OUT_KWG
 #define OUT_KWG 32
 #endif
-
 #ifndef OUT_BWG
 #define OUT_BWG 2
 #endif
@@ -40,23 +38,20 @@ __constant real Bt[WINOGRAD_ALPHA * WINOGRAD_ALPHA] = \
                     0.0f, -SQ2/2.0f, -1.0f/2.0f,  SQ2,       1.0f, 0.0f,
                     0.0f,  SQ2/2.0f, -1.0f/2.0f, -SQ2,       1.0f, 0.0f,
                     0.0f,  1.0f,      0.0f,      -5.0f/2.0f, 0.0f, 1.0f};
+
 void multiply_bt(
     real * o0, real * o1, real * o2, real * o3, real * o4, real * o5,
     real i0, real i1, real i2, real i3, real i4, real i5
 ) {
     real i3m1 = i1 * -SQ2 + i3 * (SQ2 / 2.0f);
     real i4m2 = i2 * -2.0f + i4 * 1.0f;
-
     *o0 = i0 + i2 * (-5.0f/2.0f) + i4;
     *o1 = i3m1 + i4m2;
     *o2 = -i3m1 + i4m2;
-
     real i3m1_2 = i3 * (SQ2) + i1 * (-SQ2/2.0f);
     real i4m2_2 = i2 * (-1.0f/2.0f) + i4;
-
     *o3 = i3m1_2 + i4m2_2;
     *o4 = -i3m1_2 + i4m2_2;
-
     *o5 = i1 + i3 * (-5.0f/2.0f) + i5;
 }
 
@@ -66,6 +61,7 @@ __constant real At[WINOGRAD_M * WINOGRAD_ALPHA] = \
                     0.0f, SQ2/2.0f, -SQ2/2.0f,   SQ2,      -SQ2,      0.0f,
                     0.0f, 1.0f/2.0f, 1.0f/2.0f,  2.0f,      2.0f,     0.0f,
                     0.0f, SQ2/4.0f, -SQ2/4.0f,   2.0f*SQ2, -2.0f*SQ2, 1.0f};
+
 void multiply_atv(
     real4 * o,
     real i0, real i1, real i2, real i3, real i4, real i5
@@ -74,21 +70,17 @@ void multiply_atv(
     real t1m2 = (i1 - i2) * (SQ2/4.0f);
     real t3p4 = i3 + i4;
     real t3m4 = (i3 - i4) * (SQ2);
-
     (*o).x = i0 + t1p2 + t1p2 + t3p4;
     (*o).y = t1m2 + t1m2 + t3m4;
     (*o).z = t1p2 + t3p4 + t3p4;
     (*o).w = t1m2 + t3m4 + t3m4 + i5;
 }
-
-
 void multiply_at(
     real * o0, real * o1, real * o2, real * o3,
     real i0, real i1, real i2, real i3, real i4, real i5
 ) {
     real4 o;
     multiply_atv(&o, i0, i1, i2, i3, i4, i5);
-
     *o0 = o.x;
     *o1 = o.y;
     *o2 = o.z;
@@ -211,8 +203,12 @@ void out_transform_fused_bn(__global const net_t * restrict M,
                                      const int Kpad, const int Ppad,
                                      const int batch_size,
                                      __global const net_t * restrict residual,
+                                     __constant const net_t * restrict biases,
                                      __constant const net_t * restrict means,
-                                     __constant const net_t * restrict stddivs) {
+                                     __constant const net_t * restrict stddivs,
+                                     __constant const net_t * restrict gammas,
+                                     __constant const net_t * restrict betas,
+                                     __global net_t * restrict Y2) {
 
     const int W = BOARD_SIZE;
     const int H = BOARD_SIZE;
@@ -228,8 +224,11 @@ void out_transform_fused_bn(__global const net_t * restrict M,
     volatile int bid = get_local_id(1);
 
     if (k < K && block < batch_size * P) {
+        const real bias = vload_net_t(k, biases);
         const real mean = vload_net_t(k, means);
         const real scale_stddiv = vload_net_t(k, stddivs);
+        const real gamma = vload_net_t(k, gammas);
+        const real beta = vload_net_t(k, betas);
 
         real temp[WINOGRAD_M][WINOGRAD_ALPHA];
 
@@ -259,7 +258,7 @@ void out_transform_fused_bn(__global const net_t * restrict M,
                 temp[i][0], temp[i][1], temp[i][2], temp[i][3], temp[i][4], temp[i][5]
             );
 
-            r = (r - mean) * scale_stddiv;
+            r = scale_stddiv * (r - mean) * gamma + beta;
             out_buf[kid][bid][i][0] = r.x;
             out_buf[kid][bid][i][1] = r.y;
             out_buf[kid][bid][i][2] = r.z;
@@ -299,8 +298,12 @@ void out_transform_fused_bn(__global const net_t * restrict M,
             if (residual) {
                 acc += vload_net_t(out_idx, residual);
             }
-            acc = acc > ZERO ? acc : ZERO;
 
+            if (Y2) {
+                vstore_net_t(acc, out_idx, Y2);
+            }
+
+            acc = acc > ZERO ? acc : ZERO;
             vstore_net_t(acc, out_idx, Y);
         }
     }
@@ -313,8 +316,12 @@ __kernel void out_transform_fused_bn_in(
                                      const int K,
                                      const int Kpad, const int Ppad, const int Cpad,
                                      __global const net_t * restrict residual,
+                                     __constant const net_t * restrict biases,
                                      __constant const net_t * restrict means,
-                                     __constant const net_t * restrict stddivs) {
+                                     __constant const net_t * restrict stddivs,
+                                     __constant const net_t * restrict gammas,
+                                     __constant const net_t * restrict betas,
+                                     __global net_t * restrict Y2) {
 
     const int W = BOARD_SIZE;
     const int H = BOARD_SIZE;
@@ -337,8 +344,11 @@ __kernel void out_transform_fused_bn_in(
 
     if (k < K && block < P) {
 
+        const real bias = vload_net_t(k, biases);
         const real mean = vload_net_t(k, means);
         const real scale_stddiv = vload_net_t(k, stddivs);
+        const real gamma = vload_net_t(k, gammas);
+        const real beta = vload_net_t(k, betas);
 
         real temp[WINOGRAD_M][WINOGRAD_ALPHA];
 
@@ -361,7 +371,6 @@ __kernel void out_transform_fused_bn_in(
                 temp_m0, temp_m1, temp_m2, temp_m3, temp_m4, temp_m5
             );
         }
-
         // Calculates temp.A
         for (int i = 0; i < WINOGRAD_M; i++){
             real4 r;
@@ -369,8 +378,7 @@ __kernel void out_transform_fused_bn_in(
                 &r,
                 temp[i][0], temp[i][1], temp[i][2], temp[i][3], temp[i][4], temp[i][5]
             );
-
-            r = scale_stddiv * (r - mean);
+            r = scale_stddiv * (r - mean) * gamma + beta;
             if (y + i < H && x + 0 < W) {
                 const int out_idx = (y + i) * W + (x + 0);
                 ybuf[kg * NUM_INTERSECTIONS + out_idx] = r.x;
@@ -389,24 +397,21 @@ __kernel void out_transform_fused_bn_in(
             }
         }
     }
-
     barrier(CLK_LOCAL_MEM_FENCE);
-
     const int ks = get_local_size(0);
     const int k0 = get_group_id(0) * get_local_size(0);
-
     for (int x = get_local_id(0) + ks * get_local_id(1); x < ks * NUM_INTERSECTIONS; x += get_local_size(1) * get_local_size(0)) {
         const int kx = x / NUM_INTERSECTIONS;
         const int idx = x - kx * NUM_INTERSECTIONS;
-
         const int kHWx = batch * K * NUM_INTERSECTIONS + (k0 + kx) * NUM_INTERSECTIONS;
-
         real acc = ybuf[kx * NUM_INTERSECTIONS + idx];
         if (residual) {
             acc += vload_net_t(kHWx + idx, residual);
         }
+        if (Y2) {
+            vstore_net_t(acc, kHWx + idx, Y2);
+        }
         acc = acc > ZERO ? acc : ZERO;
-
         if (Y) {
             vstore_net_t(acc, kHWx + idx, Y);
         }

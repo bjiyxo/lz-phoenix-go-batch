@@ -133,13 +133,13 @@ void GTP::setup_default_parameters() {
     cfg_precision = precision_t::HALF;
 #endif
 #endif
-    cfg_puct = 0.8f;
+    cfg_puct = 1.25f;
     cfg_softmax_temp = 1.0f;
     cfg_fpu_reduction = 0.25f;
     // see UCTSearch::should_resign
     cfg_resignpct = -1;
     cfg_noise = false;
-    cfg_fpu_root_reduction = cfg_fpu_reduction;
+    cfg_fpu_root_reduction = cfg_fpu_reduction; 
     cfg_random_cnt = 0;
     cfg_random_min_visits = 1;
     cfg_random_temp = 1.0f;
@@ -360,7 +360,7 @@ void GTP::execute(GameState & game, const std::string& xinput) {
     } else if (command.find("clear_board") == 0) {
         Training::clear_training();
         game.reset_game();
-        s_network->nncache_clear();
+	s_network->nncache_clear();
         search = std::make_unique<UCTSearch>(game, *s_network);
         assert(UCTNodePointer::get_tree_size() == 0);
         gtp_printf(id, "");
@@ -644,7 +644,7 @@ void GTP::execute(GameState & game, const std::string& xinput) {
         std::string vertex = game.move_to_text(move);
         myprintf("%s\n", vertex.c_str());
         return;
-    } else if (command.find("heatmap") == 0) {
+	} else if (command.find("heatmap") == 0) {
         std::istringstream cmdstream(command);
         std::string tmp;
         std::string symmetry;
@@ -763,7 +763,7 @@ void GTP::execute(GameState & game, const std::string& xinput) {
         } catch (const std::exception&) {
             gtp_fail_printf(id, "cannot load file");
         }
-        s_network->nncache_clear();
+	s_network->nncache_clear();
         return;
     } else if (command.find("kgs-chat") == 0) {
         // kgs-chat (game|private) Name Message
@@ -1108,7 +1108,6 @@ void GTP::execute_setoption(UCTSearch & search,
         int visits;
         valuestream >> visits;
         cfg_max_visits = visits;
-
         // 0 may be specified to mean "no limit"
         if (cfg_max_visits == 0) {
             cfg_max_visits = UCTSearch::UNLIMITED_PLAYOUTS;
@@ -1117,14 +1116,12 @@ void GTP::execute_setoption(UCTSearch & search,
         // explicit command to set memory usage is given,
         // we will stick with the initial guess we made on startup.
         search.set_visit_limit(cfg_max_visits);
-
         gtp_printf(id, "");
     } else if (name == "playouts") {
         std::istringstream valuestream(value);
         int playouts;
         valuestream >> playouts;
         cfg_max_playouts = playouts;
-
         // 0 may be specified to mean "no limit"
         if (cfg_max_playouts == 0) {
             cfg_max_playouts = UCTSearch::UNLIMITED_PLAYOUTS;
@@ -1134,12 +1131,10 @@ void GTP::execute_setoption(UCTSearch & search,
             gtp_fail_printf(id, "incorrect value");
             return;
         }
-
         // Note that if the playouts are changed but no
         // explicit command to set memory usage is given,
         // we will stick with the initial guess we made on startup.
         search.set_playout_limit(cfg_max_visits);
-
         gtp_printf(id, "");
     } else if (name == "lagbuffer") {
         std::istringstream valuestream(value);
