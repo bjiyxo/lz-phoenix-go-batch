@@ -49,7 +49,6 @@ bool NNCache::lookup(std::uint64_t hash, Netresult & result) {
     return true;
 }
 
-
 void NNCache::insert(std::uint64_t hash,
                      const Netresult& result) {
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -70,10 +69,8 @@ void NNCache::insert(std::uint64_t hash,
 }
 */
 
-
 std::shared_ptr<NNCache::Entry> NNCache::lookup_and_insert(std::uint64_t hash, bool insert, bool lookup) {
     // !lookup implies insert
-
     if (lookup) {
         ++m_lookups;
         auto iter = m_cache.find(hash);
@@ -82,7 +79,6 @@ std::shared_ptr<NNCache::Entry> NNCache::lookup_and_insert(std::uint64_t hash, b
             return iter->second;
         }
     }
-
     // skip-cache or not found
     if (insert) {
         // If the cache is too large, remove the oldest entry.

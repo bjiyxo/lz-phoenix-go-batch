@@ -125,6 +125,7 @@ private:
     std::atomic<double> m_blackevals{0.0};
     std::atomic<Status> m_status{ACTIVE};
 
+public:
     // m_expand_state acts as the lock for m_children.
     // see manipulation methods below for possible state transition
     enum class ExpandState : std::uint8_t {
@@ -145,7 +146,7 @@ private:
     // Tree data
     std::atomic<float> m_min_psa_ratio_children{2.0f};
     std::vector<UCTNodePointer> m_children;
-public:
+
     //  m_expand_state manipulation methods
     // INITIAL -> EXPANDING
     // Return false if current state is not INITIAL

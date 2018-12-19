@@ -64,7 +64,6 @@ namespace TimeManagement {
     };
 };
 
-
 struct BackupData {
     struct NodeFactor {
         UCTNode* node;

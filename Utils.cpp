@@ -22,7 +22,8 @@
 #include <mutex>
 #include <cstdarg>
 #include <cstdio>
-
+#include <cmath>
+#include <boost/format.hpp>
 #include <boost/filesystem.hpp>
 
 #ifdef _WIN32
@@ -86,6 +87,7 @@ void Utils::myprintf(const char *fmt, ...) {
     if (cfg_quiet) {
         return;
     }
+
     va_list ap;
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);

@@ -217,8 +217,12 @@ __kernel void out_transform_fused_bn(__global const net_t * restrict M,
                                      const int Kpad, const int Ppad,
                                      const int batch_size,
                                      __global const net_t * restrict residual,
+                                     __constant const net_t * restrict biases,
                                      __constant const net_t * restrict means,
-                                     __constant const net_t * restrict stddivs) {
+                                     __constant const net_t * restrict stddivs,
+                                     __constant const net_t * restrict gammas,
+                                     __constant const net_t * restrict betas,
+                                     __global net_t * restrict Y2) {
 
     const int W = BOARD_SIZE;
     const int H = BOARD_SIZE;
@@ -240,18 +244,27 @@ __kernel void out_transform_fused_bn(__global const net_t * restrict M,
         real o[WINOGRAD_M * WINOGRAD_M];
         __out_transform_eq(M, o, Kpad, Ppad, block);
 
+        const real bias = vload_net_t(k, biases);
         const real mean = vload_net_t(k, means);
         const real scale_stddiv = vload_net_t(k, stddivs);
+        const real gamma = vload_net_t(k, gammas);
+        const real beta = vload_net_t(k, betas);
 
         for (int i = 0; i < WINOGRAD_M; i++) {
             for (int j = 0; j < WINOGRAD_M; j++) {
                 const int in_idx = i * WINOGRAD_M + j;
                 const int out_idx = (y + i) * W + (x + j);
                 if (y + i < H && x + j < W) {
-                    o[in_idx] = scale_stddiv * (o[in_idx] - mean);
+                    o[in_idx] += bias;
                     if (residual) {
                         o[in_idx] += vload_net_t(kHW + out_idx, residual);
                     }
+
+                    if (Y2) {
+                        vstore_net_t(o[in_idx], kHW + out_idx, Y2);
+                    }
+		    
+                    o[in_idx] = scale_stddiv * (o[in_idx] - mean) * gamma + beta;
                     o[in_idx] = o[in_idx] > 0 ? o[in_idx] : ZERO;
                     vstore_net_t(o[in_idx], kHW + out_idx, Y);
                 }
@@ -267,9 +280,13 @@ __kernel void out_transform_fused_bn_in(
                                      const int K,
                                      const int Kpad, const int Ppad, const int Cpad,
                                      __global const net_t * restrict residual,
+                                     __constant const net_t * restrict biases,
                                      __constant const net_t * restrict means,
                                      __constant const net_t * restrict stddivs,
-                                     __local real * ybuf) {
+                                     __constant const net_t * restrict gammas,
+                                     __constant const net_t * restrict betas,
+                                     __local real * ybuf,
+                                     __global net_t * restrict Y2) {
 
     const int W = BOARD_SIZE;
     const int H = BOARD_SIZE;
@@ -295,18 +312,26 @@ __kernel void out_transform_fused_bn_in(
         real o[WINOGRAD_M * WINOGRAD_M];
         __out_transform_eq(M, o, Kpad, Ppad, block + P * batch);
 
+        const real bias = vload_net_t(k, biases);
         const real mean = vload_net_t(k, means);
         const real scale_stddiv = vload_net_t(k, stddivs);
+        const real gamma = vload_net_t(k, gammas);
+        const real beta = vload_net_t(k, betas);
 
         for (int i = 0; i < WINOGRAD_M; i++) {
             for (int j = 0; j < WINOGRAD_M; j++) {
                 const int in_idx = i * WINOGRAD_M + j;
                 const int out_idx = (y + i) * W + (x + j);
                 if (y + i < H && x + j < W) {
-                    o[in_idx] = scale_stddiv * (o[in_idx] - mean);
+                    o[in_idx] += bias;
                     if (residual) {
                         o[in_idx] += vload_net_t(kHW + out_idx, residual);
                     }
+                    if (Y2) {
+                        vstore_net_t(o[in_idx], kHW + out_idx, Y2);
+                    }
+		    
+                    o[in_idx] = scale_stddiv * (o[in_idx] - mean) * gamma + beta;
                     o[in_idx] = o[in_idx] > 0 ? o[in_idx] : ZERO;
                     ybuf[kg * NUM_INTERSECTIONS + out_idx] = o[in_idx];
                     if (Y) {

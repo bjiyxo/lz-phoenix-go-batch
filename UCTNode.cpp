@@ -115,13 +115,11 @@ bool UCTNode::create_children(Network & network,
 
 std::array<std::array<int, NUM_INTERSECTIONS>,
     Network::NUM_SYMMETRIES> Network::symmetry_nn_idx_table;
-
 void UCTNode::create_children0(Network::Netresult& raw_netlist0,
                                int symmetry,
                                std::atomic<int>& nodecount,
                                GameState& state, 
                                float min_psa_ratio) {
-
     Network::Netresult raw_netlist;
     m_net_eval = raw_netlist.winrate = raw_netlist0.winrate;
     const auto to_move = state.board.get_to_move();
@@ -129,15 +127,12 @@ void UCTNode::create_children0(Network::Netresult& raw_netlist0,
     if (state.board.white_to_move()) {
         m_net_eval = 1.0f - m_net_eval;
     }
-
     for (auto idx = size_t{ 0 }; idx < NUM_INTERSECTIONS; ++idx) {
         const auto sym_idx = Network::symmetry_nn_idx_table[symmetry][idx];
         raw_netlist.policy[idx] = raw_netlist0.policy[sym_idx];
     }
     raw_netlist.policy_pass = raw_netlist0.policy_pass;
-
     std::vector<Network::PolicyVertexPair> nodelist;
-
     auto legal_sum = 0.0f;
     for (auto i = 0; i < NUM_INTERSECTIONS; i++) {
         const auto x = i % BOARD_SIZE;
@@ -150,7 +145,6 @@ void UCTNode::create_children0(Network::Netresult& raw_netlist0,
     }
     nodelist.emplace_back(raw_netlist.policy_pass, FastBoard::PASS);
     legal_sum += raw_netlist.policy_pass;
-
     if (legal_sum > std::numeric_limits<float>::min()) {
         // re-normalize after removing illegal moves.
         for (auto& node : nodelist) {
@@ -164,7 +158,6 @@ void UCTNode::create_children0(Network::Netresult& raw_netlist0,
             node.first = uniform_prob;
         }
     }
-
     link_nodelist(nodecount, nodelist, min_psa_ratio);
     expand_done();
     return;
@@ -341,7 +334,7 @@ UCTNode* UCTNode::uct_select_child(int color, bool is_root) {
         if (child.is_inflated() && child->m_expand_state.load() == ExpandState::EXPANDING) {
             // Someone else is expanding this node, never select it
             // if we can avoid so, because we'd block on it.
-            value = -1.0f - cfg_fpu_reduction;
+	    value = -1.0f - cfg_fpu_reduction;
         }
 
         if (value > best_value) {

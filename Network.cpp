@@ -24,7 +24,9 @@
 #include <cassert>
 #include <cmath>
 #include <iterator>
+#include <iostream>
 #include <memory>
+#include <numeric>
 #include <sstream>
 #include <string>
 #include <boost/utility.hpp>
@@ -87,6 +89,7 @@ float Network::benchmark_time(int centiseconds) {
 
     GameState state;
     state.init_game(BOARD_SIZE, 7.5);
+
     for (auto i = 0; i < cpus; i++) {
         tg.add_task([this, &runcount, start, centiseconds, state]() {
             while (true) {
@@ -132,7 +135,7 @@ void Network::benchmark(const GameState* const state, const int iterations) {
 
 template<class container>
 void process_bn_var(container& weights) {
-    constexpr float epsilon = 1e-5f;
+    constexpr float epsilon = 0.001f;
     for (auto&& w : weights) {
         w = 1.0f / std::sqrt(w + epsilon);
     }
@@ -232,12 +235,12 @@ std::pair<int, int> Network::load_v1_network(std::istream& wtfile) {
     }
     // 1 format id, 1 input layer (4 x weights), 14 ending weights,
     // the rest are residuals, every residual has 8 x weight lines
-    auto residual_blocks = linecount - (1 + 4 + 14);
-    if (residual_blocks % 8 != 0) {
+    auto residual_blocks = linecount - (1 + 6 + 18);
+    if (residual_blocks % 12 != 0) {
         myprintf("\nInconsistent number of weights in the file.\n");
         return {0, 0};
     }
-    residual_blocks /= 8;
+    residual_blocks /= 12;
     myprintf("%d blocks.\n", residual_blocks);
 
     // Re-read file and process
@@ -248,7 +251,7 @@ std::pair<int, int> Network::load_v1_network(std::istream& wtfile) {
     std::getline(wtfile, line);
 
     const auto plain_conv_layers = 1 + (residual_blocks * 2);
-    const auto plain_conv_wts = plain_conv_layers * 4;
+    const auto plain_conv_wts = plain_conv_layers * 6;
     linecount = 0;
     while (std::getline(wtfile, line)) {
         std::vector<float> weights;
@@ -261,43 +264,57 @@ std::pair<int, int> Network::load_v1_network(std::istream& wtfile) {
             return {0,0};
         }
         if (linecount < plain_conv_wts) {
-            if (linecount % 4 == 0) {
+            if (linecount % 6 == 0) {
                 m_fwd_weights->m_conv_weights.emplace_back(weights);
-            } else if (linecount % 4 == 1) {
+            } else if (linecount % 6 == 1) {
                 // Redundant in our model, but they encode the
                 // number of outputs so we have to read them in.
                 m_fwd_weights->m_conv_biases.emplace_back(weights);
-            } else if (linecount % 4 == 2) {
+            } else if (linecount % 6 == 2) {
                 m_fwd_weights->m_batchnorm_means.emplace_back(weights);
-            } else if (linecount % 4 == 3) {
+            } else if (linecount % 6 == 3) {
                 process_bn_var(weights);
                 m_fwd_weights->m_batchnorm_stddevs.emplace_back(weights);
+            } else if (linecount % 6 == 4) {
+                m_fwd_weights->m_batchnorm_gammas.emplace_back(weights);
+            } else if (linecount % 6 == 5) {
+                m_fwd_weights->m_batchnorm_betas.emplace_back(weights);
             }
         } else {
             switch (linecount - plain_conv_wts) {
                 case  0: m_fwd_weights->m_conv_pol_w = std::move(weights); break;
-                case  1: m_fwd_weights->m_conv_pol_b = std::move(weights); break;
+                case  1: m_conv_pol_b = weights;
+                         m_fwd_weights->m_conv_pol_b = std::move(weights); break;
                 case  2: std::copy(cbegin(weights), cend(weights),
                                    begin(m_bn_pol_w1)); break;
                 case  3: std::copy(cbegin(weights), cend(weights),
                                    begin(m_bn_pol_w2)); break;
                 case  4: std::copy(cbegin(weights), cend(weights),
-                                   begin(m_ip_pol_w)); break;
+                                   begin(m_bn_pol_gamma)); break;
                 case  5: std::copy(cbegin(weights), cend(weights),
+                                   begin(m_bn_pol_beta)); break;
+                case  6: std::copy(cbegin(weights), cend(weights),
+                                   begin(m_ip_pol_w)); break;
+                case  7: std::copy(cbegin(weights), cend(weights),
                                    begin(m_ip_pol_b)); break;
-                case  6: m_fwd_weights->m_conv_val_w = std::move(weights); break;
-                case  7: m_fwd_weights->m_conv_val_b = std::move(weights); break;
-                case  8: std::copy(cbegin(weights), cend(weights),
-                                   begin(m_bn_val_w1)); break;
-                case  9: std::copy(cbegin(weights), cend(weights),
-                                   begin(m_bn_val_w2)); break;
+                case  8: m_fwd_weights->m_conv_val_w = std::move(weights); break;
+                case  9: m_conv_val_b = weights;
+                         m_fwd_weights->m_conv_val_b = std::move(weights); break;
                 case 10: std::copy(cbegin(weights), cend(weights),
-                                   begin(m_ip1_val_w)); break;
+                                   begin(m_bn_val_w1)); break;
                 case 11: std::copy(cbegin(weights), cend(weights),
-                                   begin(m_ip1_val_b)); break;
-                case 12: std::copy(cbegin(weights), cend(weights),
-                                   begin(m_ip2_val_w)); break;
+                                   begin(m_bn_val_w2)); break;
+			    case 12: std::copy(cbegin(weights), cend(weights),
+                                   begin(m_bn_val_gamma)); break;
                 case 13: std::copy(cbegin(weights), cend(weights),
+                                   begin(m_bn_val_beta)); break;
+                case 14: std::copy(cbegin(weights), cend(weights),
+                                   begin(m_ip1_val_w)); break;
+                case 15: std::copy(cbegin(weights), cend(weights),
+                                   begin(m_ip1_val_b)); break;
+                case 16: std::copy(cbegin(weights), cend(weights),
+                                   begin(m_ip2_val_w)); break;
+                case 17: std::copy(cbegin(weights), cend(weights),
                                    begin(m_ip2_val_b)); break;
             }
         }
@@ -376,7 +393,7 @@ void Network::select_precision(int channels) {
 
         myprintf("Initializing OpenCL (autodetecting precision).\n");
 
-        // Setup fp16 here so that we can see if we can skip autodetect
+        // Setup fp16 here so that we can see if we can skip autodetect.
         auto fp16_net = std::make_unique<OpenCLScheduler<half_float::half>>();
         if (!fp16_net->needs_autodetect()) {
             myprintf("OpenCL: using fp16/half compute support.\n");
@@ -459,6 +476,7 @@ void Network::initialize(int playouts, const std::string & weightsfile) {
     m_fwd_weights = std::make_shared<ForwardPipeWeights>();
 
     m_nncache.set_size_from_playouts(playouts);
+
     // Prepare symmetry table
     for (auto s = 0; s < NUM_SYMMETRIES; ++s) {
         for (auto v = 0; v < NUM_INTERSECTIONS; ++v) {
@@ -502,19 +520,19 @@ void Network::initialize(int playouts, const std::string & weightsfile) {
     for (auto i = size_t{0}; i < bias_size; i++) {
         auto means_size = m_fwd_weights->m_batchnorm_means[i].size();
         for (auto j = size_t{0}; j < means_size; j++) {
-            m_fwd_weights->m_batchnorm_means[i][j] -= m_fwd_weights->m_conv_biases[i][j];
-            m_fwd_weights->m_conv_biases[i][j] = 0.0f;
+            //m_fwd_weights->m_batchnorm_means[i][j] -= m_fwd_weights->m_conv_biases[i][j];
+            //m_fwd_weights->m_conv_biases[i][j] = 0.0f;
         }
     }
 
     for (auto i = size_t{0}; i < m_bn_val_w1.size(); i++) {
-        m_bn_val_w1[i] -= m_fwd_weights->m_conv_val_b[i];
-        m_fwd_weights->m_conv_val_b[i] = 0.0f;
+        //m_bn_val_w1[i] -= m_fwd_weights->m_conv_val_b[i];
+        //m_fwd_weights->m_conv_val_b[i] = 0.0f;
     }
 
     for (auto i = size_t{0}; i < m_bn_pol_w1.size(); i++) {
-        m_bn_pol_w1[i] -= m_fwd_weights->m_conv_pol_b[i];
-        m_fwd_weights->m_conv_pol_b[i] = 0.0f;
+        //m_bn_pol_w1[i] -= m_fwd_weights->m_conv_pol_b[i];
+        //m_fwd_weights->m_conv_pol_b[i] = 0.0f;
     }
 
     bool use_selfcheck = true;
@@ -522,8 +540,8 @@ void Network::initialize(int playouts, const std::string & weightsfile) {
     if (cfg_cpu_only) {
         myprintf("Initializing CPU-only evaluation.\n");
         m_forward = init_net(channels, std::make_unique<CPUPipe>());
-
-        use_selfcheck = false;
+	
+	use_selfcheck = false;
     } else {
 #ifdef USE_HALF
         // HALF support is enabled, and we are using the GPU.
@@ -542,7 +560,7 @@ void Network::initialize(int playouts, const std::string & weightsfile) {
     use_selfcheck = false;
 #endif
 
-#ifdef USE_OPENCL_SELFCHECK
+    #ifdef USE_OPENCL_SELFCHECK
     if (use_selfcheck) {
         m_forward_cpu = init_net(channels, std::make_unique<CPUPipe>());
     }
@@ -595,26 +613,43 @@ template <size_t spatial_size>
 void batchnorm(const size_t channels,
                std::vector<float>& data,
                const float* const means,
-               const float* const stddivs,
+               const float* const stddevs,
+               const float* const gammas,
+               const float* const betas,
                const float* const eltwise = nullptr) {
     const auto lambda_ReLU = [](const auto val) { return (val > 0.0f) ?
                                                           val : 0.0f; };
     for (auto c = size_t{0}; c < channels; ++c) {
         const auto mean = means[c];
-        const auto scale_stddiv = stddivs[c];
+        const auto scale_stddev = stddevs[c];
+        const auto gamma = gammas[c];
+        const auto beta = betas[c];
         const auto arr = &data[c * spatial_size];
 
         if (eltwise == nullptr) {
             // Classical BN
             for (auto b = size_t{0}; b < spatial_size; b++) {
-                arr[b] = lambda_ReLU(scale_stddiv * (arr[b] - mean));
+                arr[b] = lambda_ReLU(scale_stddev * (arr[b] - mean) * gamma + beta);
             }
         } else {
             // BN + residual add
             const auto res = &eltwise[c * spatial_size];
             for (auto b = size_t{0}; b < spatial_size; b++) {
-                arr[b] = lambda_ReLU((scale_stddiv * (arr[b] - mean)) + res[b]);
+                arr[b] = lambda_ReLU((scale_stddev * (arr[b] - mean) * gamma + beta) + res[b]);
             }
+        }
+    }
+}
+
+template <size_t spatial_size>
+void add_bias(const size_t channels,
+             std::vector<float>& data,
+             const float* const bias)
+{
+    for (auto c = size_t{0}; c < channels; ++c) {
+        const auto arr = &data[c * spatial_size];
+        for (auto b = size_t{0}; b < spatial_size; b++) {
+            arr[b] += bias[c];
         }
     }
 }
@@ -698,9 +733,7 @@ bool Network::probe_cache(const GameState* const state,
     return false;
 }
 */
-
 std::pair<Netresult_ptr, int> Network::probe_cache0(const GameState* const state) {
-
     for (auto sym = 0; sym < Network::NUM_SYMMETRIES; ++sym) {
         if (sym == Network::IDENTITY_SYMMETRY) {
             continue;
@@ -713,7 +746,6 @@ std::pair<Netresult_ptr, int> Network::probe_cache0(const GameState* const state
     }
     return std::pair<Netresult_ptr, int>(nullptr, Network::IDENTITY_SYMMETRY);
 }
-
 std::pair<Netresult_ptr, int> Network::get_output0(
     const GameState* const state, const Ensemble ensemble,
     const int symmetry, const bool skip_cache) {
@@ -760,7 +792,6 @@ std::pair<Netresult_ptr, int> Network::get_output0(
                 tmpresult.winrate / static_cast<float>(NUM_SYMMETRIES);
             result.policy_pass +=
                 tmpresult.policy_pass / static_cast<float>(NUM_SYMMETRIES);
-
             for (auto idx = size_t{ 0 }; idx < NUM_INTERSECTIONS; idx++) {
                 result.policy[idx] +=
                     tmpresult.policy[idx] / static_cast<float>(NUM_SYMMETRIES);
@@ -797,15 +828,14 @@ Network::Netresult Network::get_output(
     if (state->board.get_boardsize() != BOARD_SIZE) {
         return result;
     }
-
-    /*
+/*
     if (!skip_cache) {
         // See if we already have this in the cache.
         if (probe_cache(state, result)) {
             return result;
         }
     }
-    */
+*/
 
     if (ensemble == DIRECT) {
         assert(symmetry >= 0 && symmetry < NUM_SYMMETRIES);
@@ -857,11 +887,9 @@ Network::Netresult Network::get_output(
 /*
 void Network::get_output_internal0(
     const GameState* const state, const int symmetry, Netresult_ptr result, bool selfcheck) {
-
     assert(symmetry >= 0 && symmetry < NUM_SYMMETRIES);
     //constexpr auto width = BOARD_SIZE;
     //constexpr auto height = BOARD_SIZE;
-
     // auto input_data = std::make_unique<const std::vector<float>>(gather_features(state, symmetry));
     // std::vector<float> policy_data(OUTPUTS_POLICY * width * height);
     // std::vector<float> value_data(OUTPUTS_VALUE * width * height);
@@ -878,8 +906,8 @@ void Network::get_output_internal0(
     (void)selfcheck;
 #endif
 }
-*/
 
+*/
 void Network::process_output(
     std::vector<float>& policy_data,
     std::vector<float>& value_data,
@@ -888,36 +916,33 @@ void Network::process_output(
     Netresult_ptr result) {
     // Get the moves
     batchnorm<NUM_INTERSECTIONS>(OUTPUTS_POLICY, policy_data,
-        m_bn_pol_w1.data(), m_bn_pol_w2.data());
+        m_bn_pol_w1.data(), m_bn_pol_w2.data(),
+	m_bn_pol_gamma.data(), m_bn_pol_beta.data());
     const auto policy_out =
         innerproduct<OUTPUTS_POLICY * NUM_INTERSECTIONS, POTENTIAL_MOVES, false>(
             policy_data, m_ip_pol_w, m_ip_pol_b);
     const auto outputs = softmax(policy_out, cfg_softmax_temp);
-
     // Now get the value
     batchnorm<NUM_INTERSECTIONS>(OUTPUTS_VALUE, value_data,
-        m_bn_val_w1.data(), m_bn_val_w2.data());
+        m_bn_val_w1.data(), m_bn_val_w2.data(),
+	m_bn_val_gamma.data(), m_bn_val_beta.data());
     const auto winrate_data =
         innerproduct<OUTPUTS_VALUE * NUM_INTERSECTIONS, VALUE_LAYER, true>(
             value_data, m_ip1_val_w, m_ip1_val_b);
     const auto winrate_out =
         innerproduct<VALUE_LAYER, 1, false>(winrate_data, m_ip2_val_w, m_ip2_val_b);
-
     // Map TanH output range [-1..1] to [0..1] range
     auto winrate = (1.0f + std::tanh(winrate_out[0])) / 2.0f;
-
     for (auto idx = size_t{ 0 }; idx < NUM_INTERSECTIONS; idx++) {
         const auto sym_idx = symmetry_nn_idx_table[symmetry][idx];
         result->result.policy[sym_idx] = outputs[idx];
     }
-
     // v2 format (ELF Open Go) returns black value, not stm
     if (m_value_head_not_stm) {
         if (tomove == FastBoard::WHITE) {
             winrate = 1.0f - winrate;
         }
     }
-
     result->result.policy_pass = outputs[NUM_INTERSECTIONS];
     result->result.winrate = winrate;
     result->ready.store(true);
@@ -943,9 +968,13 @@ Network::Netresult Network::get_output_internal(
     (void) selfcheck;
 #endif
 
+    add_bias<NUM_INTERSECTIONS>(OUTPUTS_POLICY, policy_data, m_conv_pol_b.data());
+    add_bias<NUM_INTERSECTIONS>(OUTPUTS_VALUE, value_data, m_conv_val_b.data());
+
     // Get the moves
     batchnorm<NUM_INTERSECTIONS>(OUTPUTS_POLICY, policy_data,
-        m_bn_pol_w1.data(), m_bn_pol_w2.data());
+        m_bn_pol_w1.data(), m_bn_pol_w2.data(),
+        m_bn_pol_gamma.data(), m_bn_pol_beta.data());
     const auto policy_out =
         innerproduct<OUTPUTS_POLICY * NUM_INTERSECTIONS, POTENTIAL_MOVES, false>(
             policy_data, m_ip_pol_w, m_ip_pol_b);
@@ -953,7 +982,8 @@ Network::Netresult Network::get_output_internal(
 
     // Now get the value
     batchnorm<NUM_INTERSECTIONS>(OUTPUTS_VALUE, value_data,
-        m_bn_val_w1.data(), m_bn_val_w2.data());
+        m_bn_val_w1.data(), m_bn_val_w2.data(),
+        m_bn_val_gamma.data(), m_bn_val_beta.data());
     const auto winrate_data =
         innerproduct<OUTPUTS_VALUE * NUM_INTERSECTIONS, VALUE_LAYER, true>(
             value_data, m_ip1_val_w, m_ip1_val_b);
@@ -1058,25 +1088,24 @@ std::vector<float> Network::gather_features(const GameState* const state,
 
     const auto black_it = blacks_move ?
                           begin(input_data) :
-                          begin(input_data) + INPUT_MOVES * NUM_INTERSECTIONS;
+                          begin(input_data) + NUM_INTERSECTIONS;
     const auto white_it = blacks_move ?
-                          begin(input_data) + INPUT_MOVES * NUM_INTERSECTIONS :
+                          begin(input_data) + NUM_INTERSECTIONS :
                           begin(input_data);
-    const auto to_move_it = blacks_move ?
-        begin(input_data) + 2 * INPUT_MOVES * NUM_INTERSECTIONS :
-        begin(input_data) + (2 * INPUT_MOVES + 1) * NUM_INTERSECTIONS;
+    const auto to_move_it = begin(input_data) + 2 * INPUT_MOVES * NUM_INTERSECTIONS;
 
     const auto moves = std::min<size_t>(state->get_movenum() + 1, INPUT_MOVES);
     // Go back in time, fill history boards
     for (auto h = size_t{0}; h < moves; h++) {
         // collect white, black occupation planes
         fill_input_plane_pair(state->get_past_board(h),
-                              black_it + h * NUM_INTERSECTIONS,
-                              white_it + h * NUM_INTERSECTIONS,
+                              black_it + h * NUM_INTERSECTIONS * 2,
+                              white_it + h * NUM_INTERSECTIONS * 2,
                               symmetry);
     }
 
-    std::fill(to_move_it, to_move_it + NUM_INTERSECTIONS, float(true));
+    if (blacks_move)
+        std::fill(to_move_it, to_move_it + NUM_INTERSECTIONS, float(true));
 
     return input_data;
 }
@@ -1126,6 +1155,8 @@ size_t Network::get_estimated_size() {
     result += lambda_vector_size(m_fwd_weights->m_conv_biases);
     result += lambda_vector_size(m_fwd_weights->m_batchnorm_means);
     result += lambda_vector_size(m_fwd_weights->m_batchnorm_stddevs);
+    result += lambda_vector_size(m_fwd_weights->m_batchnorm_gammas);
+    result += lambda_vector_size(m_fwd_weights->m_batchnorm_betas);
 
     result += m_fwd_weights->m_conv_pol_w.size() * sizeof(float);
     result += m_fwd_weights->m_conv_pol_b.size() * sizeof(float);
@@ -1133,6 +1164,8 @@ size_t Network::get_estimated_size() {
     // Policy head
     result += OUTPUTS_POLICY * sizeof(float); // m_bn_pol_w1
     result += OUTPUTS_POLICY * sizeof(float); // m_bn_pol_w2
+    result += OUTPUTS_POLICY * sizeof(float); // m_bn_pol_gamma
+    result += OUTPUTS_POLICY * sizeof(float); // m_bn_pol_beta
     result += OUTPUTS_POLICY * NUM_INTERSECTIONS
                              * POTENTIAL_MOVES * sizeof(float); //m_ip_pol_w
     result += POTENTIAL_MOVES * sizeof(float); // m_ip_pol_b
@@ -1142,6 +1175,8 @@ size_t Network::get_estimated_size() {
     result += m_fwd_weights->m_conv_val_b.size() * sizeof(float);
     result += OUTPUTS_VALUE * sizeof(float); // m_bn_val_w1
     result += OUTPUTS_VALUE * sizeof(float); // m_bn_val_w2
+    result += OUTPUTS_VALUE * sizeof(float); // m_bn_val_gamma
+    result += OUTPUTS_VALUE * sizeof(float); // m_bn_val_beta
 
     result += OUTPUTS_VALUE * NUM_INTERSECTIONS
                             * VALUE_LAYER * sizeof(float); // m_ip1_val_w

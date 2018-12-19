@@ -18,7 +18,6 @@
 #include "config.h"
 
 #ifdef USE_OPENCL
-
 #include "GTP.h"
 #include "Random.h"
 #include "Network.h"
@@ -111,7 +110,7 @@ void OpenCLScheduler<net_t>::initialize(const int channels) {
         opencl->initialize(channels, cfg_batch_size);
 
         for (auto i = unsigned{0}; i < num_worker_threads; i++) {
-            auto t = std::thread(&OpenCLScheduler<net_t>::batch_worker, this, gnum);
+	    auto t = std::thread(&OpenCLScheduler<net_t>::batch_worker, this, gnum);
             m_worker_threads.push_back(std::move(t));
         }
         gnum++;
@@ -128,7 +127,6 @@ OpenCLScheduler<net_t>::~OpenCLScheduler() {
     for (auto & x : m_worker_threads) {
         x.join();
     }
-
     for (auto count : batch_stats) {
         myprintf("%d, ", count->load());
     }
@@ -152,8 +150,11 @@ void OpenCLScheduler<net_t>::push_input_convolution(
     unsigned int channels,
     unsigned int outputs,
     const std::vector<float>& weights,
+    const std::vector<float>& biases,
     const std::vector<float>& means,
-    const std::vector<float>& variances) {
+    const std::vector<float>& variances,
+    const std::vector<float>& gammas,
+    const std::vector<float>& betas) {
 
     for (const auto& opencl_net : m_networks) {
         const auto tuners = opencl_net->getOpenCL().get_sgemm_tuners();
@@ -170,7 +171,9 @@ void OpenCLScheduler<net_t>::push_input_convolution(
                                            m_ceil, k_ceil);
         opencl_net->push_input_convolution(
             filter_size, channels, outputs,
-            Upad, from_float(means), from_float(variances)
+            Upad, from_float(biases),
+            from_float(means), from_float(variances),
+            from_float(gammas), from_float(betas)
         );
     }
 }
@@ -180,11 +183,17 @@ void OpenCLScheduler<net_t>::push_residual(unsigned int filter_size,
                                            unsigned int channels,
                                            unsigned int outputs,
                                            const std::vector<float>& weights_1,
+                                           const std::vector<float>& biases_1,
                                            const std::vector<float>& means_1,
                                            const std::vector<float>& variances_1,
+                                           const std::vector<float>& gammas_1,
+                                           const std::vector<float>& betas_1,
                                            const std::vector<float>& weights_2,
+                                           const std::vector<float>& biases_2,
                                            const std::vector<float>& means_2,
-                                           const std::vector<float>& variances_2) {
+                                           const std::vector<float>& variances_2,
+                                           const std::vector<float>& gammas_2,
+                                           const std::vector<float>& betas_2) {
     for (const auto& opencl_net : m_networks) {
         const auto tuners = opencl_net->getOpenCL().get_sgemm_tuners();
 
@@ -200,11 +209,17 @@ void OpenCLScheduler<net_t>::push_residual(unsigned int filter_size,
                                             m_ceil, m_ceil);
         opencl_net->push_residual(filter_size, channels, outputs,
                                   Upad1,
+                                  from_float(biases_1),
                                   from_float(means_1),
                                   from_float(variances_1),
+                                  from_float(gammas_1),
+                                  from_float(betas_1),
                                   Upad2,
+                                  from_float(biases_2),
                                   from_float(means_2),
-                                  from_float(variances_2));
+                                  from_float(variances_2),
+                                  from_float(gammas_2),
+                                  from_float(betas_2));
     }
 }
 
@@ -231,8 +246,11 @@ void OpenCLScheduler<net_t>::push_weights(
     // Winograd filter transformation changes filter size to 4x4
     push_input_convolution(filter_size, channels, outputs,
                            weights->m_conv_weights[weight_index],
+                           weights->m_conv_biases[weight_index],
                            weights->m_batchnorm_means[weight_index],
-                           weights->m_batchnorm_stddevs[weight_index]);
+                           weights->m_batchnorm_stddevs[weight_index],
+                           weights->m_batchnorm_gammas[weight_index],
+                           weights->m_batchnorm_betas[weight_index]);
     weight_index++;
 
     // residual blocks : except the first entry,
@@ -240,11 +258,17 @@ void OpenCLScheduler<net_t>::push_weights(
     for (auto i = size_t{0}; i < weights->m_conv_weights.size()/2; i++) {
         push_residual(filter_size, outputs, outputs,
                       weights->m_conv_weights[weight_index],
+                      weights->m_conv_biases[weight_index],
                       weights->m_batchnorm_means[weight_index],
                       weights->m_batchnorm_stddevs[weight_index],
+                      weights->m_batchnorm_gammas[weight_index],
+                      weights->m_batchnorm_betas[weight_index],
                       weights->m_conv_weights[weight_index + 1],
+                      weights->m_conv_biases[weight_index + 1],
                       weights->m_batchnorm_means[weight_index + 1],
-                      weights->m_batchnorm_stddevs[weight_index + 1]);
+                      weights->m_batchnorm_stddevs[weight_index + 1],
+                      weights->m_batchnorm_gammas[weight_index + 1],
+                      weights->m_batchnorm_betas[weight_index + 1]);
         weight_index += 2;
     }
 
@@ -260,9 +284,8 @@ void OpenCLScheduler<net_t>::forward(const std::vector<float>& input,
     auto entry = std::make_shared<ForwardQueueEntry>(input, output_pol, output_val);
     std::unique_lock<std::mutex> lk(entry->mutex);
     {
-        std::unique_lock<std::mutex> lk(m_mutex);
+	std::unique_lock<std::mutex> lk(m_mutex);
         m_forward_queue.push_back(entry);
-
         if (m_single_eval_in_progress.load()) {
             m_waittime += 2;
         }
@@ -270,7 +293,6 @@ void OpenCLScheduler<net_t>::forward(const std::vector<float>& input,
     m_cv.notify_one();
     entry->cv.wait(lk);
 }
-
 template <typename net_t>
 void OpenCLScheduler<net_t>::forward0(std::unique_ptr<const std::vector<float>> input,
                                       const int tomove,
@@ -286,19 +308,15 @@ void OpenCLScheduler<net_t>::forward0(std::unique_ptr<const std::vector<float>> 
     lk.unlock();
     m_cv.notify_one();
 }
-
 #ifndef NDEBUG
 std::atomic<size_t> batch_stats[2];
 #endif
-
 template <typename net_t>
 void OpenCLScheduler<net_t>::batch_worker(const size_t gnum) {
     constexpr auto in_size = Network::INPUT_CHANNELS * BOARD_SIZE * BOARD_SIZE;
     constexpr auto out_pol_size = Network::OUTPUTS_POLICY * BOARD_SIZE * BOARD_SIZE;
     constexpr auto out_val_size = Network::OUTPUTS_VALUE * BOARD_SIZE * BOARD_SIZE;
-
     OpenCLContext context;
-
     // batch scheduling heuristic.
     // Returns the batch picked up from the queue (m_forward_queue)
     // 1) Wait for m_waittime milliseconds for full batch
@@ -315,11 +333,9 @@ void OpenCLScheduler<net_t>::batch_worker(const size_t gnum) {
     // 2) if we picked up a single eval, but were getting additional evals
     // while that single eval was being processed, it means that we made
     // the wrong decision.  Wait 2ms longer next time
-
     auto pickup_task = [this, gnum] () {
         std::list<std::unique_ptr<ForwardQueueEntry0>> inputs;
         int count = 0;
-
         std::unique_lock<std::mutex> lk(m_mutex);
         while (true) {
             if (!m_running) return inputs;
@@ -344,7 +360,6 @@ void OpenCLScheduler<net_t>::batch_worker(const size_t gnum) {
                     return !m_running || static_cast<int>(m_forward_queue.size()) >= cfg_batch_size;
                 }
             );
-
             if (!m_forward_queue.empty()) {
                 if (timeout && m_single_eval_in_progress.exchange(true) == false) {
                     if (m_waittime > 1) {
@@ -370,22 +385,19 @@ void OpenCLScheduler<net_t>::batch_worker(const size_t gnum) {
         */
         return inputs;
     };
-
     auto batch_input = std::vector<float>();
     auto batch_output_pol = std::vector<float>();
     auto batch_output_val = std::vector<float>();
-
     while (true) {
         auto inputs = pickup_task();
         //m_cv0.notify_all();
         auto count = inputs.size();
-
         if (!m_running) {
             return;
         }
 
 #ifndef NDEBUG
-        batch_stats[static_cast<int>(count) == cfg_batch_size ? 1 : 0]++;
+	batch_stats[static_cast<int>(count) == cfg_batch_size ? 1 : 0]++;
 #endif
 
         batch_input.resize(in_size * count);
@@ -398,12 +410,10 @@ void OpenCLScheduler<net_t>::batch_worker(const size_t gnum) {
                 index++;
             }
         }
-
         {
             m_networks[gnum]->forward(
                 batch_input, batch_output_pol, batch_output_val, context, count);
         }
-
         {
             size_t index = 0;
             for (auto it = begin(inputs); it != end(inputs); ++it) {
@@ -415,7 +425,6 @@ void OpenCLScheduler<net_t>::batch_worker(const size_t gnum) {
                 m_network->process_output(out_p, out_v, (*it)->tomove, (*it)->symmetry, (*it)->result);
             }
         }
-
         m_search->backup(); 
         m_cv0.notify_all();
     }
