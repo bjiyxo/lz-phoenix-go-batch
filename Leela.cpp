@@ -53,6 +53,7 @@ static void license_blurb() {
 static void calculate_thread_count_cpu(boost::program_options::variables_map & vm) {
     // if we are CPU-based, there is no point using more than the number of CPUs
     auto cfg_max_threads = std::min(SMP::get_num_cpus(), MAX_CPUS);
+
     if (vm.count("threads")) {
         auto num_threads = vm["threads"].as<int>();
         if (num_threads > cfg_max_threads) {
@@ -64,6 +65,7 @@ static void calculate_thread_count_cpu(boost::program_options::variables_map & v
         cfg_num_threads = cfg_max_threads;
     }
 }
+
 #ifdef USE_OPENCL
 static void calculate_thread_count_gpu(boost::program_options::variables_map & vm) {
     auto cfg_max_threads = MAX_CPUS;
@@ -89,6 +91,34 @@ static void calculate_thread_count_gpu(boost::program_options::variables_map & v
     if (vm.count("batchsize")) {
         cfg_batch_size = vm["batchsize"].as<int>();
     }
+        /*
+        if (vm.count("batchsize")) {
+            cfg_batch_size = vm["batchsize"].as<int>();
+        } else {
+            cfg_batch_size = cfg_num_threads / gpu_count;
+
+            // no idea why somebody wants to use threads less than the number of GPUs
+            // but should at least prevent crashing
+            if (cfg_batch_size == 0) {
+                cfg_batch_size = 1;
+            }
+        }
+    } else {
+        if (vm.count("batchsize")) {
+            cfg_batch_size = vm["batchsize"].as<int>();
+        } else {
+            cfg_batch_size = 5;
+        }
+
+        cfg_num_threads = std::min(cfg_max_threads, cfg_batch_size * gpu_count);
+    }
+
+    if (cfg_num_threads < cfg_batch_size) {
+        printf("Threads number = %d must be larger than batch size = %d\n", cfg_num_threads, cfg_batch_size);
+        exit(EXIT_FAILURE);
+    }
+    */
+
 }
 #endif
 
@@ -100,7 +130,7 @@ static void parse_commandline(int argc, char *argv[]) {
         ("help,h", "Show commandline options.")
         ("gtp,g", "Enable GTP mode.")
         ("threads,t", po::value<int>(),
-                      "Number of threads to use. Defaults to max number of threads on system.")
+                      "Number of threads to use.  Defaults to max number of threads on system.")
         ("playouts,p", po::value<int>(),
                        "Weaken engine by limiting the number of playouts. "
                        "Requires --noponder.")
@@ -125,7 +155,6 @@ static void parse_commandline(int argc, char *argv[]) {
         ("benchmark", "Test network and exit. Default args:\n-v3200 --noponder "
                       "-m0 -t1 -s1.")
         ("cpu-only", "Use CPU-only implementation and do not use GPU.")
-	("disable-frac-backup", "Enable fractional backup feature.")
         ;
 #ifdef USE_OPENCL
     po::options_description gpu_desc("GPU options");
@@ -134,11 +163,10 @@ static void parse_commandline(int argc, char *argv[]) {
                 "ID of the OpenCL device(s) to use (disables autodetection).")
         ("full-tuner", "Try harder to find an optimal OpenCL tuning.")
         ("tune-only", "Tune OpenCL only and then exit.")
-	("batchsize", po::value<int>(), "Max batch size. Default is the number of threads divided by the number of GPUs")
+        ("batchsize", po::value<int>(), "Max batch size. Default is the number of threads divided by the number of GPUs")
 #ifdef USE_HALF
-	("precision", po::value<std::string>(),
-            "Floating-point precision (single/half/auto).\n"
-            "Default is to auto which automatically determines which one to use.")
+        ("precision", po::value<std::string>(), "Floating-point precision (single/half/auto).\n"
+                                                "Default is to auto which automatically determines which one to use.")
 #endif
         ;
 #endif
@@ -222,10 +250,6 @@ static void parse_commandline(int argc, char *argv[]) {
         cfg_quiet = true;  // Set this early to avoid unnecessary output.
     }
 
-    if (vm.count("disable-frac-backup")) {
-        cfg_frac_backup = false;
-    }
-
 #ifdef USE_TUNER
     if (vm.count("puct")) {
         cfg_puct = vm["puct"].as<float>();
@@ -262,6 +286,7 @@ static void parse_commandline(int argc, char *argv[]) {
 #else
 #endif
 
+
 #ifdef USE_OPENCL
     if (vm.count("gpu")) {
         cfg_gpus = vm["gpu"].as<std::vector<int> >();
@@ -269,17 +294,11 @@ static void parse_commandline(int argc, char *argv[]) {
 
     if (vm.count("full-tuner")) {
         cfg_sgemm_exhaustive = true;
-
-	// --full-tuner auto-implies --tune-only.  The full tuner is so slow
-        // that nobody will wait for it to finish befure running a game.
-        // This simply prevents some edge cases from confusing other people.
-        cfg_tune_only = true;
     }
 
     if (vm.count("tune-only")) {
         cfg_tune_only = true;
     }
-
 #ifdef USE_HALF
     if (vm.count("precision")) {
         auto precision = vm["precision"].as<std::string>();
@@ -294,14 +313,6 @@ static void parse_commandline(int argc, char *argv[]) {
             exit(EXIT_FAILURE);
         }
     }
-    if (cfg_precision == precision_t::AUTO) {
-        // Auto precision is not supported for full tuner cases.
-        if (cfg_sgemm_exhaustive) {
-            printf("Automatic precision not supported when doing exhaustive tuning\n");
-            printf("Please add '--precision single' or '--precision half'\n");
-            exit(EXIT_FAILURE);
-        }
-    }
 #endif
 #else
     cfg_cpu_only = true;
@@ -309,11 +320,11 @@ static void parse_commandline(int argc, char *argv[]) {
     if (vm.count("cpu-only")) {
         cfg_cpu_only = true;
     }
+
     if (cfg_cpu_only) {
         calculate_thread_count_cpu(vm);
     } else {
 #ifdef USE_OPENCL
-
         calculate_thread_count_gpu(vm);
 #endif
     }
@@ -405,8 +416,7 @@ static void parse_commandline(int argc, char *argv[]) {
     if (vm.count("lagbuffer")) {
         int lagbuffer = vm["lagbuffer"].as<int>();
         if (lagbuffer != cfg_lagbuffer_cs) {
-            myprintf("Using per-move time margin of %.2fs.\n",
-                     lagbuffer/100.0f);
+            myprintf("Using per-move time margin of %.2fs.\n", lagbuffer/100.0f);
             cfg_lagbuffer_cs = lagbuffer;
         }
     }
@@ -418,14 +428,11 @@ static void parse_commandline(int argc, char *argv[]) {
         cfg_random_cnt = 0;
         cfg_rng_seed = 1;
         cfg_timemanage = TimeManagement::OFF;  // Reliable number of playouts.
+
         if (!vm.count("playouts") && !vm.count("visits")) {
             cfg_max_visits = 3200; // Default to self-play and match values.
         }
     }
-
-    // Do not lower the expected eval for root moves that are likely not
-    // the best if we have introduced noise there exactly to explore more.
-    cfg_fpu_root_reduction = cfg_noise ? 0.0f : cfg_fpu_reduction;
 
     auto out = std::stringstream{};
     for (auto i = 1; i < argc; i++) {
@@ -473,6 +480,7 @@ void benchmark(GameState& game) {
 }
 
 int main(int argc, char *argv[]) {
+    auto input = std::string{};
 
     // Set up engine parameters
     GTP::setup_default_parameters();
@@ -485,7 +493,7 @@ int main(int argc, char *argv[]) {
 
     setbuf(stdout, nullptr);
     setbuf(stderr, nullptr);
-#ifndef _WIN32
+#ifndef WIN32
     setbuf(stdin, nullptr);
 #endif
 
@@ -513,7 +521,6 @@ int main(int argc, char *argv[]) {
             std::cout << "Leela: ";
         }
 
-	auto input = std::string{};
         if (std::getline(std::cin, input)) {
             Utils::log_input(input);
             GTP::execute(*maingame, input);

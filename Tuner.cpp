@@ -40,9 +40,6 @@
 
 const auto TUNER_FILE_LOCAL = std::string("leelaz_opencl_tuning");
 
-template <typename net_t>
-std::vector<std::string> Tuner<net_t>::tuned_devices;
-
 #ifndef USE_BLAS
 // Eigen helpers
 template <typename T>
@@ -123,65 +120,33 @@ static bool IsMultiple(const size_t a, const size_t b) {
 
 template <typename net_t>
 bool Tuner<net_t>::valid_config_sgemm(Parameters p, bool exhaustive) {
-    if (p["TCE"] == 0) {
-        if (!IsMultiple(p["MWG"], p["MDIMC"]*p["VWM"])) {
+    if (!IsMultiple(p["MWG"], p["MDIMC"]*p["VWM"])) {
+        return false;
+    }
+    if (!IsMultiple(p["NWG"], p["NDIMC"]*p["VWN"])) {
+        return false;
+    }
+    if (!IsMultiple(p["MWG"], p["MDIMA"]*p["VWM"])) {
+        return false;
+    }
+    if (!IsMultiple(p["NWG"], p["NDIMB"]*p["VWN"])) {
+        return false;
+    }
+    if (!IsMultiple(p["KWG"], p["MDIMC"]*p["NDIMC"]/p["MDIMA"])) {
+        return false;
+    }
+    if (!IsMultiple(p["KWG"], p["MDIMC"]*p["NDIMC"]/p["NDIMB"])) {
+        return false;
+    }
+    // Extra restrictions for a fast tuning run
+    if (!exhaustive) {
+        if (p["MDIMC"] != p["MDIMA"]) {
             return false;
         }
-        if (!IsMultiple(p["NWG"], p["NDIMC"]*p["VWN"])) {
+        if (p["NDIMC"] != p["NDIMB"]) {
             return false;
         }
-        if (!IsMultiple(p["MWG"], p["MDIMA"]*p["VWM"])) {
-            return false;
-        }
-	if (!IsMultiple(p["NWG"], p["NDIMB"]*p["VWN"])) {
-            return false;
-        }
-	if (!IsMultiple(p["KWG"], p["MDIMC"]*p["NDIMC"]/p["MDIMA"])) {
-            return false;
-        }
-        if (!IsMultiple(p["KWG"], p["MDIMC"]*p["NDIMC"]/p["NDIMB"])) {
-            return false;
-        }
-        // Extra restrictions for a fast tuning run
-        if (!exhaustive) {
-            if (p["MDIMC"] != p["MDIMA"]) {
-                return false;
-            }
-            if (p["NDIMC"] != p["NDIMB"]) {
-                return false;
-            }
-            if (p["SA"] != p["SB"]) {
-                return false;
-            }
-        }
-    } else {
-        if (!m_use_tensorcore) {
-            return false;
-        }
-        // in tensorcore implementations, MDIMA and NDIMB represents the
-        // wmmv multiplication dimensions, that is,
-        // m16n16k16 / m32n8k16 / m8n32k16.  Thus m * n is fixed to 256.
-        if (p["MDIMA"] * p["NDIMB"] != 256) {
-            return false;
-        }
-        if (p["MWG"] < p["MDIMC"]) {
-            return false;
-        }
-        if (p["NWG"] < p["NDIMC"]) {
-            return false;
-        }
-	if (p["MDIMC"] < p["MDIMA"]) {
-            return false;
-        }
-	if (p["NDIMC"] < p["NDIMB"]) {
-            return false;
-        }
-        // VWM / VWN has no meaning if we don't do SA / SB.
-        // only test VWM / VWN == 2
-        if (p["SA"] == 0 && p["VWM"] != 2) {
-            return false;
-        }
-        if (p["SB"] == 0 && p["VWN"] != 2) {
+        if (p["SA"] != p["SB"]) {
             return false;
         }
     }
@@ -281,7 +246,8 @@ static float compare_ref(std::vector<net_t> &x, std::vector<net_t> &ref,
 }
 
 template <typename net_t>
-std::vector<Parameters> Tuner<net_t>::build_valid_params() {
+std::string Tuner<net_t>::tune_sgemm(const int m, const int n, const int k,
+                              const int batch_size, const int runs) {
     auto opts = std::vector<Configurations>();
     if (cfg_sgemm_exhaustive) {
         opts = {
@@ -319,72 +285,6 @@ std::vector<Parameters> Tuner<net_t>::build_valid_params() {
         };
     }
 
-    // tensorcore options
-    auto topts = std::vector<Configurations>();
-    if (cfg_sgemm_exhaustive) {
-        topts = {
-            {"MWG", {32, 64, 128, 256}},
-            {"NWG", {8, 16, 32, 64}},
-            {"KWG", {16, 32, 64}},
-            {"MDIMC", {8, 16, 32, 64}},
-            {"NDIMC", {8, 16, 32, 64}},
-            {"MDIMA", {8, 16, 32}},
-            {"NDIMB", {8, 16, 32}},
-            {"KWI", {2}},
-            {"VWM", {2, 4, 8}},
-            {"VWN", {2, 4, 8}},
-            {"STRM", {0}},
-            {"STRN", {0}},
-            {"SA", {0, 1}},
-            {"SB", {0, 1}},
-        };
-    } else {
-        topts = {
-            {"MWG", {32, 64, 128}},
-            {"NWG", {8, 16, 32}},
-            {"KWG", {16, 32}},
-            {"MDIMC", {8, 16, 32}},
-            {"NDIMC", {8, 16, 32}},
-            {"MDIMA", {8, 16, 32}},
-            {"NDIMB", {8, 16, 32}},
-            {"KWI", {2}},
-            {"VWM", {2}},
-            {"VWN", {2}},
-            {"STRM", {0}},
-            {"STRN", {0}},
-            {"SA", {0}},
-            {"SB", {0}},
-        };
-    }
-
-    // Don't use thead Rng or determism will depend on if tuner ran.
-    auto rng = Random{0};
-    auto valid_params = std::vector<Parameters>{};
-    auto build_from = [this, &rng, &valid_params](std::vector<Configurations> & opts, int tce) {
-        auto cfgs = 1;
-        for (auto c = size_t{0}; c < opts.size(); c++) {
-            cfgs *= opts[c].second.size();
-        }
-        for (auto i = 0; i < cfgs; i++) {
-            Parameters param = get_parameters_by_int(opts, i);
-            param["TCE"] = tce;
-            if (valid_config_sgemm(param, cfg_sgemm_exhaustive)) {
-                if (cfg_sgemm_exhaustive) {
-                    if (rng.randfix<16>() != 0) {
-                        continue;
-                    }
-                }
-                valid_params.push_back(param);
-            }
-        }
-    };
-    build_from(opts, 0);
-    build_from(topts, 1);
-    return std::move(valid_params);
-}
-template <typename net_t>
-std::string Tuner<net_t>::tune_sgemm(const int m, const int n, const int k,
-                              const int batch_size, const int runs) {
     // This needs to be at minimum the maximum (MNK/WG) values above.
     auto m_max = std::max(64, m);
     auto n_max = std::max(64, n);
@@ -421,8 +321,26 @@ std::string Tuner<net_t>::tune_sgemm(const int m, const int n, const int k,
 
     myprintf("\nStarted OpenCL SGEMM tuner.\n");
 
-    auto valid_params = build_valid_params();
+    auto valid_params = std::vector<int>{};
+    auto cfgs = 1;
+    for (auto c = size_t{0}; c < opts.size(); c++) {
+        cfgs *= opts[c].second.size();
+    }
 
+    // Don't use thead Rng or determism will depend on if tuner ran.
+    auto rng = Random{0};
+
+    for (auto i = 0; i < cfgs; i++) {
+        Parameters param = get_parameters_by_int(opts, i);
+        if (valid_config_sgemm(param, cfg_sgemm_exhaustive)) {
+            if (cfg_sgemm_exhaustive) {
+                if (rng.randfix<16>() != 0) {
+                    continue;
+                }
+            }
+            valid_params.emplace_back(i);
+        }
+    }
     myprintf("Will try %zu valid configurations.\n", valid_params.size());
 
     std::string best_params;
@@ -443,9 +361,10 @@ std::string Tuner<net_t>::tune_sgemm(const int m, const int n, const int k,
     auto failed_enqueue = 0;
     auto failed_error = 0;
 
-    for (auto& p : valid_params) {
+    for (const auto& i : valid_params) {
         param_counter++;
 
+        auto p = get_parameters_by_int(opts, i);
         auto defines = parameters_to_defines(p);
 
         try {
@@ -493,13 +412,6 @@ std::string Tuner<net_t>::tune_sgemm(const int m, const int n, const int k,
         cl::NDRange size_sgemm = {(m_ceil * p["MDIMC"]) / p["MWG"],
                                   (n_ceil * p["NDIMC"]) / p["NWG"],
                                   size_t(batch_size)};
-	// tensorcore implementation uses a different dimension
-        if (p["TCE"]) {
-            local_sgemm = {32 * p["MDIMC"] / p["MDIMA"], p["NDIMC"] / p["NDIMB"], 1};
-            size_sgemm = {32 * m_ceil / p["MDIMA"] * p["MDIMC"] / p["MWG"],
-                          n_ceil / p["NDIMB"] * p["NDIMC"] / p["NWG"],
-                          size_t(batch_size)};
-        }
 
         auto sum = 0.0f;
         auto error = 0.0f;
@@ -542,31 +454,30 @@ std::string Tuner<net_t>::tune_sgemm(const int m, const int n, const int k,
             failed_error++;
         }
 
-	auto param_str = parameters_to_string(p);
-
-        auto kernel_ms = 1e-6f * (sum / runs);
-        // Timing is in nanoseconds (10^-9), Giga = 10^9, so this works out
-        auto kernel_gflops = total_flops / (sum / runs);
-            myprintf("(%u/%u) %s %.4f ms (%.1f GFLOPS) Error: %f\n",
+        if (error < getTunerMaxError<net_t>() && (best_time == 0 || sum < best_time)) {
+            auto param_str = parameters_to_string(p);
+            auto kernel_ms = 1e-6f * (sum / runs);
+            // Timing is in nanoseconds (10^-9), Giga = 10^9, so this works out
+            auto kernel_gflops = total_flops / (sum / runs);
+            myprintf("(%u/%u) %s %.4f ms (%.1f GFLOPS)\n",
                param_counter, valid_params.size(), param_str.c_str(),
-               kernel_ms, kernel_gflops, error);
-	if (error < getTunerMaxError<net_t>() && (best_time == 0 || sum < best_time)) {
+               kernel_ms, kernel_gflops);
             best_time = sum;
             best_params = defines;
         }
     }
     if (best_time == 0) {
         if (failed_compile > 0) {
-            myprintf_error("Failed to compile: %d kernels.\n", failed_compile);
+            printf("Failed to compile: %d kernels.\n", failed_compile);
         }
         if (failed_enqueue > 0) {
-            myprintf_error("Failed to enqueue: %d kernels\n", failed_enqueue);
+            printf("Failed to enqueue: %d kernels\n", failed_enqueue);
         }
         if (failed_error > 0) {
-            myprintf_error("Too high error: %d kernels\n", failed_error);
+            printf("Too high error: %d kernels\n", failed_error);
         }
-        myprintf_error("Failed to find a working configuration.\nCheck your OpenCL drivers.\n");
-        myprintf_error("Minimum error: %f. Error bound: %f\n", min_error, getTunerMaxError<net_t>());
+        printf("Failed to find a working configuration.\nCheck your OpenCL drivers.\n");
+        printf("Minimum error: %f. Error bound: %f\n", min_error, getTunerMaxError<net_t>());
         throw std::runtime_error("Tuner failed to find working configuration.");
     }
     return best_params;
@@ -668,22 +579,7 @@ std::string Tuner<net_t>::load_sgemm_tuners(const int m, const int n, const int 
                                      const int batch_size) {
     auto tuner_file = leelaz_file(TUNER_FILE_LOCAL);
     auto file = std::ifstream{tuner_file};
-
-    auto try_prior_tuning = file.good();
-    // If we want full tuning, don't reuse previously tuned results
-    // except if the tuning was created from this run from a different
-    // GPU instance with the same name.  This prevents the tuner running
-    // for multiple times if the system has multiple same GPUs.
-    if (try_prior_tuning && cfg_sgemm_exhaustive) {
-        auto dev = m_opencl.get_device_name();
-        try_prior_tuning = std::any_of(
-            begin(tuned_devices),
-            end(tuned_devices),
-            [&dev](const std::string & x) { return dev == x; }
-        );
-    }
-    tuned_devices.emplace_back(m_opencl.get_device_name());
-    if (try_prior_tuning) {
+    if (!cfg_sgemm_exhaustive && file.good()) {
         auto line = std::string{};
         while (std::getline(file, line)) {
             auto tuners = sgemm_tuners_from_line(line, m, n, k, batch_size);
@@ -696,13 +592,6 @@ std::string Tuner<net_t>::load_sgemm_tuners(const int m, const int n, const int 
     auto tuners = tune_sgemm(m, n, k, batch_size);
     store_sgemm_tuners(m, n, k, batch_size, tuners);
     return tuners;
-}
-
-template <typename net_t>
-void Tuner<net_t>::enable_tensorcore() {}
-template <>
-void Tuner<half_float::half>::enable_tensorcore() {
-    m_use_tensorcore = true;
 }
 
 template class Tuner<float>;

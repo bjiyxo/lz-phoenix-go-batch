@@ -21,10 +21,10 @@
 
 #include <memory>
 #include <vector>
-#include <condition_variable>
 
 #include "config.h"
 #include "NNCache.h"
+
 class UCTSearch;
 class Network;
 
@@ -37,8 +37,6 @@ public:
         std::vector<std::vector<float>> m_conv_biases;
         std::vector<std::vector<float>> m_batchnorm_means;
         std::vector<std::vector<float>> m_batchnorm_stddevs;
-        std::vector<std::vector<float>> m_batchnorm_gammas;
-        std::vector<std::vector<float>> m_batchnorm_betas;
 
         // Policy head
         std::vector<float> m_conv_pol_w;
@@ -54,20 +52,17 @@ public:
     virtual bool needs_autodetect() { return false; };
     virtual void forward(const std::vector<float>& input,
                          std::vector<float>& output_pol,
-                         std::vector<float>& output_val) = 0;
+                         std::vector<float>& output_val) = 0;    
     virtual void forward0(std::unique_ptr<const std::vector<float>> input,
                           const int tomove,
                           const int symmetry,
                           Netresult_ptr result) = 0;
-
     virtual void push_weights(unsigned int filter_size,
                               unsigned int channels,
                               unsigned int outputs,
                               std::shared_ptr<const ForwardPipeWeights> weights) = 0;
     UCTSearch* m_search;
     Network* m_network;
-    std::mutex m_mutex;
-    std::condition_variable m_cv0;
 };
 
 #endif

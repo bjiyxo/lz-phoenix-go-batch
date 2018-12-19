@@ -43,16 +43,25 @@ public:
     UCTNode() = delete;
     ~UCTNode() = default;
 
-    void create_children(Network::Netresult& raw_netlist,
+    bool create_children(Network & network,
+                         std::atomic<int>& nodecount,
+                         GameState& state,
+                         float& eval,
+                         float min_psa_ratio = 0.0f);
+    void create_children0(Network::Netresult& raw_netlist,
                           int symmetry,
                           std::atomic<int>& nodecount,
                           GameState& state,
-                          float min_psa_ratio = 0.0f);
+                          float min_psa_ratio);
 
     const std::vector<UCTNodePointer>& get_children() const;
     void sort_children(int color);
-    UCTNode& get_best_root_child(int color, bool running = false);
-    std::pair<UCTNode*, float> uct_select_child(int color, bool is_root);
+    UCTNode& get_best_root_child(int color);
+    UCTNode* uct_select_child(int color, bool is_root);
+
+    enum visit_type : bool {
+        SEL = 0, WR = 1 // for selection or for winrate
+    };
 
     size_t count_nodes_and_clear_expand_state();
     bool first_visit() const;
@@ -63,15 +72,15 @@ public:
     bool valid() const;
     bool active() const;
     int get_move() const;
-    double get_visits(visit_type type = WR) const;
+    double get_visits(visit_type type = SEL) const;
     float get_policy() const;
     void set_policy(float policy);
     float get_eval(int tomove) const;
     float get_raw_eval(int tomove, int virtual_loss = 0) const;
     float get_net_eval(int tomove) const;
     void virtual_loss();
-    void virtual_loss_undo(int multiplicity = 1);
-    void update(float eval, int multiplicity, float factor = 1.0f, float sel_factor = 1.0f);
+    void virtual_loss_undo();
+    void update(float eval, float factor = 1.0f, float sel_factor = 1.0f);
 
     // Defined in UCTNodeRoot.cpp, only to be called on m_root in UCTSearch
     void randomize_first_proportionally();
@@ -84,6 +93,7 @@ public:
     std::unique_ptr<UCTNode> find_child(const int move);
     void inflate_all_children();
 
+    void clear_expand_state();
 private:
     enum Status : char {
         INVALID, // superko
@@ -115,7 +125,6 @@ private:
     std::atomic<double> m_blackevals{0.0};
     std::atomic<Status> m_status{ACTIVE};
 
-public:
     // m_expand_state acts as the lock for m_children.
     // see manipulation methods below for possible state transition
     enum class ExpandState : std::uint8_t {
@@ -136,13 +145,13 @@ public:
     // Tree data
     std::atomic<float> m_min_psa_ratio_children{2.0f};
     std::vector<UCTNodePointer> m_children;
-
+public:
     //  m_expand_state manipulation methods
     // INITIAL -> EXPANDING
     // Return false if current state is not INITIAL
     bool acquire_expanding();
 
-    // EXPANDING -> EXPANDED
+    // EXPANDING -> DONE
     void expand_done();
 
     // EXPANDING -> INITIAL

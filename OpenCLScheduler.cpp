@@ -18,6 +18,7 @@
 #include "config.h"
 
 #ifdef USE_OPENCL
+
 #include "GTP.h"
 #include "Random.h"
 #include "Network.h"
@@ -102,28 +103,18 @@ void OpenCLScheduler<net_t>::initialize(const int channels) {
     // Launch the worker threads.  Minimum 1 worker per GPU, but use enough threads
     // so that we can at least concurrently schedule something to the GPU.
     auto num_worker_threads = 2; // cfg_num_threads / cfg_batch_size / (m_opencl.size() + 1) + 1;
-    m_max_queue_size = cfg_batch_size * m_opencl.size() * num_worker_threads;// +cfg_batch_size - cfg_num_threads + 0;
-    myprintf("max queue size: %d\n", m_max_queue_size.load());
-    // num_worker_threads + 1 ... more worker threads don't help? GPU deal with two forward passes in parallel?
+    auto gnum = 0;
     for (auto i = 0; i < cfg_batch_size; i++) {
         batch_stats.emplace_back(new std::atomic<int>(0));
-	pickup_stats.emplace_back(new std::atomic<int>(0));
     }
-    auto gnum = 0;
     for (auto & opencl : m_opencl) {
         opencl->initialize(channels, cfg_batch_size);
 
         for (auto i = unsigned{0}; i < num_worker_threads; i++) {
-	    auto t = std::thread(&OpenCLScheduler<net_t>::batch_worker, this, gnum, i);
+            auto t = std::thread(&OpenCLScheduler<net_t>::batch_worker, this, gnum);
             m_worker_threads.push_back(std::move(t));
         }
         gnum++;
-    }
-
-    // Exit immediately after tuning.  We should exit here because we skipped
-    // initializing rest of the kernels due to some NVIDIA drivers crashing.
-    if (cfg_tune_only) {
-        exit(EXIT_SUCCESS);
     }
 }
 
@@ -138,16 +129,10 @@ OpenCLScheduler<net_t>::~OpenCLScheduler() {
         x.join();
     }
 
-    myprintf("batch stats: ");
     for (auto count : batch_stats) {
         myprintf("%d, ", count->load());
     }
-    myprintf("\npickup stats: ");
-    for (auto count : pickup_stats) {
-        myprintf("%d, ", count->load());
-    }
-    myprintf("\nidle count: %d", m_networks[0]->idle_count.load());
-    //myprintf("\nmax queue size: %d", m_max_queue_size.load());
+    myprintf("\n");
 }
 
 template<typename net_t>
@@ -167,11 +152,8 @@ void OpenCLScheduler<net_t>::push_input_convolution(
     unsigned int channels,
     unsigned int outputs,
     const std::vector<float>& weights,
-    const std::vector<float>& biases,
     const std::vector<float>& means,
-    const std::vector<float>& variances,
-    const std::vector<float>& gammas,
-    const std::vector<float>& betas) {
+    const std::vector<float>& variances) {
 
     for (const auto& opencl_net : m_networks) {
         const auto tuners = opencl_net->getOpenCL().get_sgemm_tuners();
@@ -188,9 +170,7 @@ void OpenCLScheduler<net_t>::push_input_convolution(
                                            m_ceil, k_ceil);
         opencl_net->push_input_convolution(
             filter_size, channels, outputs,
-            Upad, from_float(biases),
-            from_float(means), from_float(variances),
-            from_float(gammas), from_float(betas)
+            Upad, from_float(means), from_float(variances)
         );
     }
 }
@@ -200,17 +180,11 @@ void OpenCLScheduler<net_t>::push_residual(unsigned int filter_size,
                                            unsigned int channels,
                                            unsigned int outputs,
                                            const std::vector<float>& weights_1,
-                                           const std::vector<float>& biases_1,
                                            const std::vector<float>& means_1,
                                            const std::vector<float>& variances_1,
-                                           const std::vector<float>& gammas_1,
-                                           const std::vector<float>& betas_1,
                                            const std::vector<float>& weights_2,
-                                           const std::vector<float>& biases_2,
                                            const std::vector<float>& means_2,
-                                           const std::vector<float>& variances_2,
-                                           const std::vector<float>& gammas_2,
-                                           const std::vector<float>& betas_2) {
+                                           const std::vector<float>& variances_2) {
     for (const auto& opencl_net : m_networks) {
         const auto tuners = opencl_net->getOpenCL().get_sgemm_tuners();
 
@@ -226,17 +200,11 @@ void OpenCLScheduler<net_t>::push_residual(unsigned int filter_size,
                                             m_ceil, m_ceil);
         opencl_net->push_residual(filter_size, channels, outputs,
                                   Upad1,
-                                  from_float(biases_1),
                                   from_float(means_1),
                                   from_float(variances_1),
-                                  from_float(gammas_1),
-                                  from_float(betas_1),
                                   Upad2,
-                                  from_float(biases_2),
                                   from_float(means_2),
-                                  from_float(variances_2),
-                                  from_float(gammas_2),
-                                  from_float(betas_2));
+                                  from_float(variances_2));
     }
 }
 
@@ -263,11 +231,8 @@ void OpenCLScheduler<net_t>::push_weights(
     // Winograd filter transformation changes filter size to 4x4
     push_input_convolution(filter_size, channels, outputs,
                            weights->m_conv_weights[weight_index],
-                           weights->m_conv_biases[weight_index],
                            weights->m_batchnorm_means[weight_index],
-                           weights->m_batchnorm_stddevs[weight_index],
-                           weights->m_batchnorm_gammas[weight_index],
-                           weights->m_batchnorm_betas[weight_index]);
+                           weights->m_batchnorm_stddevs[weight_index]);
     weight_index++;
 
     // residual blocks : except the first entry,
@@ -275,17 +240,11 @@ void OpenCLScheduler<net_t>::push_weights(
     for (auto i = size_t{0}; i < weights->m_conv_weights.size()/2; i++) {
         push_residual(filter_size, outputs, outputs,
                       weights->m_conv_weights[weight_index],
-                      weights->m_conv_biases[weight_index],
                       weights->m_batchnorm_means[weight_index],
                       weights->m_batchnorm_stddevs[weight_index],
-                      weights->m_batchnorm_gammas[weight_index],
-                      weights->m_batchnorm_betas[weight_index],
                       weights->m_conv_weights[weight_index + 1],
-                      weights->m_conv_biases[weight_index + 1],
                       weights->m_batchnorm_means[weight_index + 1],
-                      weights->m_batchnorm_stddevs[weight_index + 1],
-                      weights->m_batchnorm_gammas[weight_index + 1],
-                      weights->m_batchnorm_betas[weight_index + 1]);
+                      weights->m_batchnorm_stddevs[weight_index + 1]);
         weight_index += 2;
     }
 
@@ -301,8 +260,9 @@ void OpenCLScheduler<net_t>::forward(const std::vector<float>& input,
     auto entry = std::make_shared<ForwardQueueEntry>(input, output_pol, output_val);
     std::unique_lock<std::mutex> lk(entry->mutex);
     {
-	std::unique_lock<std::mutex> lk(m_mutex);
+        std::unique_lock<std::mutex> lk(m_mutex);
         m_forward_queue.push_back(entry);
+
         if (m_single_eval_in_progress.load()) {
             m_waittime += 2;
         }
@@ -310,116 +270,142 @@ void OpenCLScheduler<net_t>::forward(const std::vector<float>& input,
     m_cv.notify_one();
     entry->cv.wait(lk);
 }
+
 template <typename net_t>
 void OpenCLScheduler<net_t>::forward0(std::unique_ptr<const std::vector<float>> input,
                                       const int tomove,
                                       const int symmetry,
                                       Netresult_ptr result) {
-    // auto max_size = cfg_batch_size * m_opencl.size() * 2;
-    m_search->m_positions++;
     std::unique_lock<std::mutex> lk(m_mutex);
     m_forward_queue0.push_back(std::make_unique<ForwardQueueEntry0>(
         std::move(input), tomove, symmetry, result));
-    m_cv.notify_one();
-    if (m_search->m_run && (int)m_forward_queue0.size() >= m_max_queue_size.load()) {
-        m_cv0.wait(lk, [&] { return (int)m_forward_queue0.size() < m_max_queue_size.load()
-            || !m_search->m_run; });
-        lk.unlock();
-        m_search->backup();
+    auto max_size = cfg_batch_size * m_opencl.size() * 2;
+    if (m_forward_queue0.size() >= max_size) {
+        m_cv0.wait(lk, [&] { return m_forward_queue0.size() < max_size; });
     }
+    lk.unlock();
+    m_cv.notify_one();
 }
+
 #ifndef NDEBUG
 std::atomic<size_t> batch_stats[2];
 #endif
+
 template <typename net_t>
-void OpenCLScheduler<net_t>::batch_worker(const size_t gnum, const size_t i) {
+void OpenCLScheduler<net_t>::batch_worker(const size_t gnum) {
     constexpr auto in_size = Network::INPUT_CHANNELS * BOARD_SIZE * BOARD_SIZE;
     constexpr auto out_pol_size = Network::OUTPUTS_POLICY * BOARD_SIZE * BOARD_SIZE;
     constexpr auto out_val_size = Network::OUTPUTS_VALUE * BOARD_SIZE * BOARD_SIZE;
+
     OpenCLContext context;
 
-    auto batch_input = std::vector<net_t>(in_size * cfg_batch_size);
-    auto batch_output_pol = std::vector<float>(out_pol_size * cfg_batch_size);
-    auto batch_output_val = std::vector<float>(out_val_size * cfg_batch_size);
+    // batch scheduling heuristic.
+    // Returns the batch picked up from the queue (m_forward_queue)
+    // 1) Wait for m_waittime milliseconds for full batch
+    // 2) if we don't have a full batch then just do a single eval
+    //
+    // The purpose of m_waittime is to prevent the system from deadlocking
+    // because we were waiting for a job too long, while the job is never
+    // going to come due to a control dependency (e.g., evals stuck on a
+    // critical path).  To do so:
+    //
+    // 1) if we picked up a single eval, and ended up that there were no
+    // new incoming requests while handling the single eval, it means that
+    // we hit the critical path.  Wait 1ms shorter next time
+    // 2) if we picked up a single eval, but were getting additional evals
+    // while that single eval was being processed, it means that we made
+    // the wrong decision.  Wait 2ms longer next time
 
-    auto pickup_task = [this, gnum, in_size, i](std::vector<net_t>&batch_in) {
-        std::vector<std::unique_ptr<ForwardQueueEntry0>> inputs;
-        inputs.reserve(cfg_batch_size);
-        auto it = begin(inputs);
+    auto pickup_task = [this, gnum] () {
+        std::list<std::unique_ptr<ForwardQueueEntry0>> inputs;
         int count = 0;
-	int remaining = cfg_batch_size;
 
-	std::unique_lock<std::mutex> lk(m_mutex, std::defer_lock);
-        while (remaining) {
-            bool idle = !(m_networks[gnum]->m_occupied.load()) && inputs.size() > 0;
-            if (idle || !m_running) break;
-            lk.lock();
+        std::unique_lock<std::mutex> lk(m_mutex);
+        while (true) {
+            if (!m_running) return inputs;
             int queue_size = m_forward_queue0.size();
             if (!queue_size) {
                 m_cv.wait(lk,
-		    [this, gnum, &queue_size, &idle, &inputs] {
-                    queue_size = m_forward_queue0.size();
-                    idle = !(m_networks[gnum]->m_occupied.load()) && inputs.size() > 0;
-                    return !m_running || queue_size > 0 || idle; });
+                    [this, &queue_size] { queue_size = m_forward_queue0.size();
+                                          return !m_running || queue_size > 0; });
+            }
+            count = std::min(queue_size, cfg_batch_size);
+            break;
+            /*
+            if (count >= cfg_batch_size) {
+                count = cfg_batch_size;
+                break;
             }
 
-	    if (idle || !m_running) break;
+            bool timeout = !m_cv.wait_for(
+                lk,
+                std::chrono::milliseconds(m_waittime),
+                [this] () {
+                    return !m_running || static_cast<int>(m_forward_queue.size()) >= cfg_batch_size;
+                }
+            );
 
-            count = std::min(queue_size, remaining);
-            auto end = begin(m_forward_queue0);
-            std::advance(end, count);
-            std::move(begin(m_forward_queue0), end, std::back_inserter(inputs));
-
-            m_forward_queue0.erase(begin(m_forward_queue0), end);
-            lk.unlock();
-            if (count) { (*pickup_stats[count - 1])++; }
-
-            m_max_queue_size -= count;
-            remaining -= count;
-
-            while (it != inputs.end()) {
-                std::transform((*it)->in->begin(), (*it)->in->end(), std::back_inserter(batch_in),
-                    [](float x) {return (net_t)x; });
-                ++it;
+            if (!m_forward_queue.empty()) {
+                if (timeout && m_single_eval_in_progress.exchange(true) == false) {
+                    if (m_waittime > 1) {
+                        m_waittime--;
+                    }
+                    count = 1;
+                    break;
+                }
             }
+            */
         }
-	++(m_networks[gnum]->m_occupied);
-        //myprintf("max queue size: %d - worker %d picking up\n", m_max_queue_size.load(), i);
-        m_max_queue_size -= remaining;
-        //myprintf("max queue size: %d - worker %d pickup finished\n", m_max_queue_size.load(), i);
+        auto end = begin(m_forward_queue0);
+        std::advance(end, count);
+        std::move(begin(m_forward_queue0), end, std::back_inserter(inputs));
+        m_forward_queue0.erase(begin(m_forward_queue0), end);
+        
+        if (count) { (*batch_stats[count - 1])++; }
+        /*
+        for (auto count : batch_stats) {
+            myprintf("%d, ", count->load());
+        }
+        myprintf("\n");
+        */
         return inputs;
     };
 
-    while (true) {
+    auto batch_input = std::vector<float>();
+    auto batch_output_pol = std::vector<float>();
+    auto batch_output_val = std::vector<float>();
 
-	batch_input.resize(0);
-        auto inputs = pickup_task(batch_input);
+    while (true) {
+        auto inputs = pickup_task();
         //m_cv0.notify_all();
         auto count = inputs.size();
-	if (count) { (*batch_stats[count - 1])++; }
 
-	/*
-        for (auto count : batch_stats) {
-        myprintf("%d, ", count->load());
+        if (!m_running) {
+            return;
         }
 
-	myprintf("\n");
-        */
-        if (!m_running) return;
 #ifndef NDEBUG
-	batch_stats[static_cast<int>(count) == cfg_batch_size ? 1 : 0]++;
+        batch_stats[static_cast<int>(count) == cfg_batch_size ? 1 : 0]++;
 #endif
 
         batch_input.resize(in_size * count);
         batch_output_pol.resize(out_pol_size * count);
         batch_output_val.resize(out_val_size * count);
+        {
+            size_t index = 0;
+            for (auto it = begin(inputs); it != end(inputs); ++it) {
+                std::copy(begin(*((*it)->in)), end(*((*it)->in)), begin(batch_input) + in_size * index);
+                index++;
+            }
+        }
 
         {
             m_networks[gnum]->forward(
-                batch_input, batch_output_pol, batch_output_val, context, m_cv, count);
+                batch_input, batch_output_pol, batch_output_val, context, count);
         }
+
         {
-            auto index = 0;
+            size_t index = 0;
             for (auto it = begin(inputs); it != end(inputs); ++it) {
                 std::vector<float> out_p(begin(batch_output_pol) + out_pol_size * index,
                                          begin(batch_output_pol) + out_pol_size * (index + 1));
@@ -429,11 +415,9 @@ void OpenCLScheduler<net_t>::batch_worker(const size_t gnum, const size_t i) {
                 m_network->process_output(out_p, out_v, (*it)->tomove, (*it)->symmetry, (*it)->result);
             }
         }
-	m_max_queue_size += cfg_batch_size;
-        //myprintf("max queue size: %d - worker %d\n", m_max_queue_size.load(), i);
+
+        m_search->backup(); 
         m_cv0.notify_all();
-	m_search->backup();
-        //m_search->m_cv.notify_all();
     }
 }
 

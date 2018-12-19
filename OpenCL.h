@@ -30,7 +30,6 @@
 #include <string>
 #include <vector>
 #include <mutex>
-#include <condition_variable>
 #include <cassert>
 
 #include "Tuner.h"
@@ -64,7 +63,6 @@ private:
     cl::Kernel m_out_transform_bn_in_kernel;
     cl::Buffer m_inBuffer;
     cl::Buffer m_inBuffer2;
-    cl::Buffer m_inBufferNoBN;
     cl::Buffer m_VBuffer;
     cl::Buffer m_MBuffer;
     cl::Buffer m_pinnedOutBuffer_pol;
@@ -75,8 +73,6 @@ private:
 template <typename net_t>
 class OpenCL_Network {
 public:
-    std::atomic<int> m_occupied{0};
-    std::atomic<int> idle_count{0};
     OpenCL_Network(OpenCL<net_t> & opencl) : m_opencl(opencl) {}
     OpenCL<net_t> & getOpenCL() {
         return m_opencl;
@@ -86,18 +82,12 @@ public:
                        unsigned int channels,
                        unsigned int outputs,
                        const std::vector<net_t>& weights,
-                       const std::vector<net_t>& biases,
                        const std::vector<net_t>& means,
-                       const std::vector<net_t>& variances,
-                       const std::vector<net_t>& gammas,
-                       const std::vector<net_t>& betas) {
+                       const std::vector<net_t>& variances) {
         size_t layer = get_layer_count();
         push_weights(layer, weights);
-        push_weights(layer, biases);
         push_weights(layer, means);
         push_weights(layer, variances);
-        push_weights(layer, gammas);
-        push_weights(layer, betas);
         m_layers[layer].is_input_convolution = true;
         m_layers[layer].outputs = outputs;
         m_layers[layer].filter_size = filter_size;
@@ -108,30 +98,18 @@ public:
                        unsigned int channels,
                        unsigned int outputs,
                        const std::vector<net_t>& weights_1,
-                       const std::vector<net_t>& biases_1,
                        const std::vector<net_t>& means_1,
                        const std::vector<net_t>& variances_1,
-                       const std::vector<net_t>& gammas_1,
-                       const std::vector<net_t>& betas_1,
                        const std::vector<net_t>& weights_2,
-                       const std::vector<net_t>& biases_2,
                        const std::vector<net_t>& means_2,
-                       const std::vector<net_t>& variances_2,
-                       const std::vector<net_t>& gammas_2,
-                       const std::vector<net_t>& betas_2) {
+                       const std::vector<net_t>& variances_2) {
         size_t layer = get_layer_count();
         push_weights(layer, weights_1);
-        push_weights(layer, biases_1);
         push_weights(layer, means_1);
         push_weights(layer, variances_1);
-		push_weights(layer, gammas_1);
-        push_weights(layer, betas_1);
         push_weights(layer, weights_2);
-        push_weights(layer, biases_2);
         push_weights(layer, means_2);
         push_weights(layer, variances_2);
-        push_weights(layer, gammas_2);
-        push_weights(layer, betas_2);
         m_layers[layer].is_residual_block = true;
         m_layers[layer].outputs = outputs;
         m_layers[layer].filter_size = filter_size;
@@ -156,11 +134,10 @@ public:
         return m_layers.size();
     }
 
-    void forward(const std::vector<net_t>& input,
+    void forward(const std::vector<float>& input,
             std::vector<float>& output_pol,
             std::vector<float>& output_val,
             OpenCLContext & opencl_context,
-            std::condition_variable& cv,
             const int batch_size = 1);
 
 private:
@@ -175,7 +152,6 @@ private:
                     int channels, int outputs,
                     cl::Buffer& bufferIn,
                     cl::Buffer& bufferOut,
-                    cl::Buffer* bufferOutNoBN,
                     cl::Buffer& bufferV,
                     cl::Buffer& bufferM, weight_slice_t weights,
                     cl::Buffer* bufferResidual,
@@ -198,7 +174,6 @@ private:
     // because queue.finish() is a busy wait and having a lot of threads
     // waiting here is counterproductive CPU-wise.  At least std::mutex
     // isn't busy wait so it should be better.
-    std::mutex m_enqueue_mutex;
     std::mutex m_queue_finish_mutex;
     std::vector<Layer> m_layers;
 };
@@ -230,16 +205,13 @@ private:
     struct sgemm_tuners {
         size_t mwg, nwg, kwg;
         size_t vwm, vwn;
-        size_t mdima, ndimb;
         size_t mdimc, ndimc;
-        size_t tce;
     };
     sgemm_tuners m_sgemm_tuners;
     size_t m_wavefront_size{0};
     size_t m_max_workgroup_size{0};
     std::vector<size_t> m_max_workgroup_dims;
     bool m_fp16_compute{false};
-    bool m_tensorcore{false};
     bool m_init_ok{false};
 };
 

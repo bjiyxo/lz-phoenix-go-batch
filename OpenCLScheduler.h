@@ -30,7 +30,6 @@
 #include "ThreadPool.h"
 extern int cfg_batch_size;
 
-
 template <typename net_t>
 class OpenCLScheduler : public ForwardPipe {
     class ContextPoolEntry {
@@ -81,52 +80,43 @@ public:
                               unsigned int outputs,
                               std::shared_ptr<const ForwardPipeWeights> weights);
 private:
-    std::atomic<bool> m_running{true};
+    bool m_running = true;
     std::vector<std::unique_ptr<OpenCL_Network<net_t>>> m_networks;
     std::vector<std::unique_ptr<OpenCL<net_t>>> m_opencl;
 
-    //std::mutex m_mutex;
+    std::mutex m_mutex;
     std::condition_variable m_cv;
-    //std::condition_variable m_cv0;
+    std::condition_variable m_cv0;
+
     // start with 10 milliseconds : lock protected
     int m_waittime{10};
     
     // set to true when single (non-batch) eval is in progress
     std::atomic<bool> m_single_eval_in_progress{false};
+
     std::list<std::shared_ptr<ForwardQueueEntry>> m_forward_queue;
     std::list<std::unique_ptr<ForwardQueueEntry0>> m_forward_queue0;
-    std::atomic<int> m_max_queue_size;
 
     std::list<std::thread> m_worker_threads;
     std::vector<std::atomic<int>*> batch_stats;
-    std::vector<std::atomic<int>*> pickup_stats;
 
-    void batch_worker(const size_t gnum, const size_t i);
+    void batch_worker(const size_t gnum);
     void push_input_convolution(unsigned int filter_size,
                                 unsigned int channels,
                                 unsigned int outputs,
                                 const std::vector<float>& weights,
-                                const std::vector<float>& biases,
                                 const std::vector<float>& means,
-                                const std::vector<float>& variances,
-                                const std::vector<float>& gammas,
-                                const std::vector<float>& betas);
+                                const std::vector<float>& variances);
 
     void push_residual(unsigned int filter_size,
                        unsigned int channels,
                        unsigned int outputs,
                        const std::vector<float>& weights_1,
-                       const std::vector<float>& biases_1,
                        const std::vector<float>& means_1,
                        const std::vector<float>& variances_1,
-                       const std::vector<float>& gammas_1,
-                       const std::vector<float>& betas_1,
                        const std::vector<float>& weights_2,
-                       const std::vector<float>& biases_2,
                        const std::vector<float>& means_2,
-                       const std::vector<float>& variances_2,
-                       const std::vector<float>& gammas_2,
-                       const std::vector<float>& betas_2);
+                       const std::vector<float>& variances_2);
 
     void push_convolve(unsigned int filter_size,
                        unsigned int channels,

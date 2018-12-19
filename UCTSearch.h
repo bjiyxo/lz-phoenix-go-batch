@@ -34,11 +34,36 @@
 #include "Network.h"
 
 
+class SearchResult {
+public:
+    SearchResult() = default;
+    bool valid() const { return m_valid;  }
+    float eval() const { return m_eval;  }
+    static SearchResult from_eval(float eval) {
+        return SearchResult(eval);
+    }
+    static SearchResult from_score(float board_score) {
+        if (board_score > 0.0f) {
+            return SearchResult(1.0f);
+        } else if (board_score < 0.0f) {
+            return SearchResult(0.0f);
+        } else {
+            return SearchResult(0.5f);
+        }
+    }
+private:
+    explicit SearchResult(float eval)
+        : m_valid(true), m_eval(eval) {}
+    bool m_valid{false};
+    float m_eval{0.0f};
+};
+
 namespace TimeManagement {
     enum enabled_t {
         AUTO = -1, OFF = 0, ON = 1, FAST = 2, NO_PRUNING = 3
     };
 };
+
 
 struct BackupData {
     struct NodeFactor {
@@ -51,7 +76,6 @@ struct BackupData {
     Netresult_ptr netresult;
     int symmetry;
     std::unique_ptr<GameState> state;
-    int multiplicity{1};
 };
 
 class UCTSearch {
@@ -68,10 +92,10 @@ public:
 
     /*
         Default memory limit in bytes.
-        ~1.6GiB on 32-bits and about 5.2GiB on 64-bits.
+        ~1.3GiB on 32-bits and about 5.2GiB on 64-bits.
     */
     static constexpr size_t DEFAULT_MAX_MEMORY =
-        (sizeof(void*) == 4 ? 1'600'000'000 : 5'200'000'000);
+        (sizeof(void*) == 4 ? 1'325'000'000 : 5'200'000'000);
 
     /*
         Minimum allowed size for maximum tree size.
@@ -95,9 +119,6 @@ public:
     void increment_playouts();
     void play_simulation(std::unique_ptr<GameState> currstate, UCTNode* node, int thread_num);
     void backup();
-    std::atomic<int> m_positions{0};
-    std::atomic<bool> m_run{false};
-    std::condition_variable m_cv;
 
 private:
     float get_min_psa_ratio() const;
@@ -121,6 +142,7 @@ private:
     std::unique_ptr<UCTNode> m_root;
     std::atomic<int> m_nodes{0};
     std::atomic<int> m_playouts{0};
+    std::atomic<bool> m_run{false};
     int m_maxplayouts;
     int m_maxvisits;
 
@@ -129,11 +151,10 @@ private:
     Network & m_network;
 
     std::mutex m_mutex;
+    std::condition_variable m_cv;
     std::queue<std::unique_ptr<BackupData>> backup_queue;
-    size_t max_queue_length;
     void backup(BackupData& bd);
     void failed_simulation(BackupData& bd);
-    int m_failed_simulations{ 0 };
 };
 
 class UCTWorker {

@@ -42,10 +42,6 @@ class UCTNode;
 // All methods should be thread-safe except destructor and when
 // the instanced is 'moved from'.
 
-enum visit_type : int {
-    SEL, WR, VL // for selection, for winrate, or for selection with virtual loss
-};
-
 class UCTNodePointer {
 private:
     static constexpr std::uint64_t INVALID = 2;
@@ -96,9 +92,6 @@ public:
     UCTNodePointer(std::int16_t vertex, float policy);
     UCTNodePointer(const UCTNodePointer&) = delete;
 
-    void from_ptr(UCTNode * ptr) {
-        m_data.store(reinterpret_cast<std::uint64_t>(ptr) | POINTER);
-    }
 
     bool is_inflated() const {
         return is_inflated(m_data.load());
@@ -123,13 +116,12 @@ public:
     // proxy of UCTNode methods which can be called without
     // constructing UCTNode
     bool valid() const;
-    double get_visits(visit_type type = WR) const;
+    double get_visits() const;
     float get_policy() const;
     bool active() const;
     int get_move() const;
     // this can only be called if it is an inflated pointer
     float get_eval(int tomove) const;
-    float get_raw_eval(int tomove) const;
 };
 
 #endif

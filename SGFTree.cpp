@@ -44,15 +44,15 @@ void SGFTree::init_state() {
     // Initialize with defaults.
     // The SGF might be missing boardsize or komi
     // which means we'll never initialize properly.
-    m_state.init_game(std::min(BOARD_SIZE, 19), 7.5f);
+    m_state.init_game(19, 7.5f);
 }
 
-const KoState * SGFTree::get_state(void) const{
+KoState * SGFTree::get_state() {
     assert(m_initialized);
     return &m_state;
 }
 
-const SGFTree * SGFTree::get_child(size_t count) const {
+SGFTree * SGFTree::get_child(size_t count) {
     if (count < m_children.size()) {
         assert(m_initialized);
         return &(m_children[count]);
@@ -64,8 +64,8 @@ const SGFTree * SGFTree::get_child(size_t count) const {
 // This follows the entire line, and doesn't really need the intermediate
 // states, just the moves. As a consequence, states that contain more than
 // just moves won't have any effect.
-GameState SGFTree::follow_mainline_state(unsigned int movenum) const{
-    const auto* link = this;
+GameState SGFTree::follow_mainline_state(unsigned int movenum) {
+    auto link = static_cast<SGFTree*>(this);
     // This initializes a starting state from a KoState and
     // sets up the game history.
     GameState result(get_state());
@@ -337,7 +337,7 @@ int SGFTree::string_to_vertex(const std::string& movestring) const {
     return vtx;
 }
 
-int SGFTree::get_move(int tomove) const {
+int SGFTree::get_move(int tomove) {
     std::string colorstring;
 
     if (tomove == FastBoard::BLACK) {
@@ -347,6 +347,7 @@ int SGFTree::get_move(int tomove) const {
     }
 
     auto it = m_properties.find(colorstring);
+
     if (it != end(m_properties)) {
         std::string movestring = it->second;
         return string_to_vertex(movestring);
@@ -372,10 +373,10 @@ FastBoard::vertex_t SGFTree::get_winner() const {
     return m_winner;
 }
 
-std::vector<int> SGFTree::get_mainline() const {
+std::vector<int> SGFTree::get_mainline() {
     std::vector<int> moves;
 
-    const auto* link = this;
+    auto link = this;
     auto tomove = link->m_state.get_to_move();
     link = link->get_child(0);
 
