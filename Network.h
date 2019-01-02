@@ -64,14 +64,15 @@ public:
     using Netresult = NNCache::Netresult;
 
     Netresult get_output(const GameState* const state,
-                         const Ensemble ensemble,
-                         const int symmetry = -1,
-                         const bool skip_cache = false,
-                         const bool force_selfcheck = false);
+        const Ensemble ensemble,
+        const int symmetry = -1,
+        const bool skip_cache = false,
+        const bool force_selfcheck = false);
     std::pair<Netresult_ptr, int> get_output0(const GameState* const state,
                          const Ensemble ensemble,
                          const int symmetry = -1,
                          const bool skip_cache = false);
+
     static constexpr auto INPUT_MOVES = 8;
     static constexpr auto INPUT_CHANNELS = 2 * INPUT_MOVES + 1;
     static constexpr auto OUTPUTS_POLICY = 2;
@@ -106,6 +107,7 @@ public:
         const int tomove,
         const int symmetry,
         Netresult_ptr result);
+
     // Symmetry helper
     static std::array<std::array<int, NUM_INTERSECTIONS>,
         Network::NUM_SYMMETRIES> symmetry_nn_idx_table;
@@ -135,7 +137,7 @@ private:
                                const std::vector<float>& V,
                                std::vector<float>& M, const int C, const int K);
     Netresult get_output_internal(const GameState* const state,
-                                  const int symmetry, bool selfcheck = false);
+        const int symmetry, bool selfcheck = false);
     //Netresult_ptr get_output_internal0(const GameState* const state,
     //                                   const int symmetry, bool selfcheck = false);
     static void fill_input_plane_pair(const FullBoard& board,

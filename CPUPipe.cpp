@@ -67,6 +67,7 @@ void CPUPipe::winograd_transform_in(const std::vector<float>& in,
     auto buffer_offset = 0;
     auto buffer_entries = 0;
 
+
     // multiple vector [i0..i5] by Bt and produce [o0..o5]
     // const auto Bt = std::array<float, WINOGRAD_TILE>
     //           {1.0f,  0.0f,     -5.0f/2.0f,  0.0f,      1.0f, 0.0f,
@@ -81,13 +82,17 @@ void CPUPipe::winograd_transform_in(const std::vector<float>& in,
     ) {
         auto i3m1 = i1 * -SQ2 + i3 * (SQ2 / 2.0f);
         auto i4m2 = i2 * -2.0f + i4 * 1.0f;
+
         o0 = i0 + i2 * (-5.0f/2.0f) + i4;
         o1 = i3m1 + i4m2;
         o2 = -i3m1 + i4m2;
+
         auto i3m1_2 = i3 * (SQ2) + i1 * (-SQ2/2.0f);
         auto i4m2_2 = i2 * (-1.0f/2.0f) + i4;
+
         o3 = i3m1_2 + i4m2_2;
         o4 = -i3m1_2 + i4m2_2;
+
         o5 = i1 + i3 * (-5.0f/2.0f) + i5;
     };
 
@@ -215,6 +220,7 @@ void CPUPipe::winograd_transform_out(const std::vector<float>& M,
         auto t1m2 = (i1 - i2) * (SQ2/4.0f);
         auto t3p4 = i3 + i4;
         auto t3m4 = (i3 - i4) * (SQ2);
+
         o0 = i0 + t1p2 + t1p2 + t3p4;
         o1 = t1m2 + t1m2 + t3m4;
         o2 = t1p2 + t3p4 + t3p4;
@@ -237,12 +243,11 @@ void CPUPipe::winograd_transform_out(const std::vector<float>& M,
                             M[(xi*WINOGRAD_ALPHA + nu)*K*P + k*P + b];
                     }
                 }
-
                 std::array<std::array<float, WINOGRAD_ALPHA>, WINOGRAD_M> temp;
                 std::array<std::array<float, WINOGRAD_M>, WINOGRAD_M> o;
 
                 // Calculates transpose(A).temp_m.A
-		for (auto j = 0; j < WINOGRAD_ALPHA; j++){
+                for (auto j = 0; j < WINOGRAD_ALPHA; j++){
                     multiply_at(
                         temp[0][j], temp[1][j], temp[2][j], temp[3][j],
                         temp_m[0][j], temp_m[1][j], temp_m[2][j], temp_m[3][j], temp_m[4][j], temp_m[5][j]
@@ -250,7 +255,7 @@ void CPUPipe::winograd_transform_out(const std::vector<float>& M,
                 }
 
                 for (auto i = 0; i < WINOGRAD_M; i++){
-		    multiply_at(
+                    multiply_at(
                         o[i][0], o[i][1], o[i][2], o[i][3],
                         temp[i][0], temp[i][1], temp[i][2], temp[i][3], temp[i][4], temp[i][5]
                     );

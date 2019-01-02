@@ -133,10 +133,10 @@ bool Tuner<net_t>::valid_config_sgemm(Parameters p, bool exhaustive) {
         if (!IsMultiple(p["MWG"], p["MDIMA"]*p["VWM"])) {
             return false;
         }
-	if (!IsMultiple(p["NWG"], p["NDIMB"]*p["VWN"])) {
+        if (!IsMultiple(p["NWG"], p["NDIMB"]*p["VWN"])) {
             return false;
         }
-	if (!IsMultiple(p["KWG"], p["MDIMC"]*p["NDIMC"]/p["MDIMA"])) {
+        if (!IsMultiple(p["KWG"], p["MDIMC"]*p["NDIMC"]/p["MDIMA"])) {
             return false;
         }
         if (!IsMultiple(p["KWG"], p["MDIMC"]*p["NDIMC"]/p["NDIMB"])) {
@@ -158,6 +158,7 @@ bool Tuner<net_t>::valid_config_sgemm(Parameters p, bool exhaustive) {
         if (!m_use_tensorcore) {
             return false;
         }
+
         // in tensorcore implementations, MDIMA and NDIMB represents the
         // wmmv multiplication dimensions, that is,
         // m16n16k16 / m32n8k16 / m8n32k16.  Thus m * n is fixed to 256.
@@ -318,7 +319,6 @@ std::vector<Parameters> Tuner<net_t>::build_valid_params() {
             {"SB", {1}},
         };
     }
-
     // tensorcore options
     auto topts = std::vector<Configurations>();
     if (cfg_sgemm_exhaustive) {
@@ -359,6 +359,7 @@ std::vector<Parameters> Tuner<net_t>::build_valid_params() {
 
     // Don't use thead Rng or determism will depend on if tuner ran.
     auto rng = Random{0};
+
     auto valid_params = std::vector<Parameters>{};
     auto build_from = [this, &rng, &valid_params](std::vector<Configurations> & opts, int tce) {
         auto cfgs = 1;
@@ -380,8 +381,10 @@ std::vector<Parameters> Tuner<net_t>::build_valid_params() {
     };
     build_from(opts, 0);
     build_from(topts, 1);
+
     return std::move(valid_params);
 }
+
 template <typename net_t>
 std::string Tuner<net_t>::tune_sgemm(const int m, const int n, const int k,
                               const int batch_size, const int runs) {
@@ -443,7 +446,7 @@ std::string Tuner<net_t>::tune_sgemm(const int m, const int n, const int k,
     auto failed_enqueue = 0;
     auto failed_error = 0;
 
-    for (auto& p : valid_params) {
+    for (auto & p : valid_params) {
         param_counter++;
 
         auto defines = parameters_to_defines(p);
@@ -493,7 +496,7 @@ std::string Tuner<net_t>::tune_sgemm(const int m, const int n, const int k,
         cl::NDRange size_sgemm = {(m_ceil * p["MDIMC"]) / p["MWG"],
                                   (n_ceil * p["NDIMC"]) / p["NWG"],
                                   size_t(batch_size)};
-	// tensorcore implementation uses a different dimension
+        // tensorcore implementation uses a different dimension
         if (p["TCE"]) {
             local_sgemm = {32 * p["MDIMC"] / p["MDIMA"], p["NDIMC"] / p["NDIMB"], 1};
             size_sgemm = {32 * m_ceil / p["MDIMA"] * p["MDIMC"] / p["MWG"],
@@ -542,15 +545,14 @@ std::string Tuner<net_t>::tune_sgemm(const int m, const int n, const int k,
             failed_error++;
         }
 
-	auto param_str = parameters_to_string(p);
-
+        auto param_str = parameters_to_string(p);
         auto kernel_ms = 1e-6f * (sum / runs);
         // Timing is in nanoseconds (10^-9), Giga = 10^9, so this works out
         auto kernel_gflops = total_flops / (sum / runs);
             myprintf("(%u/%u) %s %.4f ms (%.1f GFLOPS) Error: %f\n",
                param_counter, valid_params.size(), param_str.c_str(),
                kernel_ms, kernel_gflops, error);
-	if (error < getTunerMaxError<net_t>() && (best_time == 0 || sum < best_time)) {
+        if (error < getTunerMaxError<net_t>() && (best_time == 0 || sum < best_time)) {
             best_time = sum;
             best_params = defines;
         }
@@ -670,6 +672,7 @@ std::string Tuner<net_t>::load_sgemm_tuners(const int m, const int n, const int 
     auto file = std::ifstream{tuner_file};
 
     auto try_prior_tuning = file.good();
+
     // If we want full tuning, don't reuse previously tuned results
     // except if the tuning was created from this run from a different
     // GPU instance with the same name.  This prevents the tuner running
@@ -683,6 +686,7 @@ std::string Tuner<net_t>::load_sgemm_tuners(const int m, const int n, const int 
         );
     }
     tuned_devices.emplace_back(m_opencl.get_device_name());
+
     if (try_prior_tuning) {
         auto line = std::string{};
         while (std::getline(file, line)) {
@@ -700,6 +704,7 @@ std::string Tuner<net_t>::load_sgemm_tuners(const int m, const int n, const int 
 
 template <typename net_t>
 void Tuner<net_t>::enable_tensorcore() {}
+
 template <>
 void Tuner<half_float::half>::enable_tensorcore() {
     m_use_tensorcore = true;

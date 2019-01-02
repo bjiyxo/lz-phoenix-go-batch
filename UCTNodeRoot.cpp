@@ -99,9 +99,9 @@ void UCTNode::dirichlet_noise(float epsilon, float alpha) {
         auto eta_a = dirichlet_vector[child_cnt++];
         policy = policy * (1 - epsilon) + epsilon * eta_a;
         child->set_policy(policy);
-	m_children_ptrs.emplace_back(child.get());
+        m_children_ptrs.emplace_back(child.get());
     }
-    std::stable_sort(rbegin(m_children_ptrs), rend(m_children_ptrs),
+    std::stable_sort(rbegin(m_children_ptrs), rend(m_children_ptrs), 
         [](UCTNode* a, UCTNode* b) { return a->get_policy() < b->get_policy(); });
     for (auto i = 0; i < m_children.size(); i++) {
         m_children[i].from_ptr(m_children_ptrs[i]);

@@ -59,7 +59,7 @@ const std::string sourceCode_common =
     #include "kernels/common.opencl"
 ;
 
-static const std::string sourceCode_tensorcore_test =
+static const std::string sourceCode_tensorcore_test = 
     #include "kernels/tensorcore_test.opencl"
 ;
 
@@ -137,7 +137,7 @@ void OpenCL_Network<net_t>::forward(const std::vector<net_t>& input,
                              std::vector<float>& output_pol,
                              std::vector<float>& output_val,
                              OpenCLContext & opencl_context,
-			     std::condition_variable& cv,
+                             std::condition_variable& cv,
                              const int batch_size) {
     constexpr auto tiles = WINOGRAD_P;
     constexpr auto one_plane = NUM_INTERSECTIONS * sizeof(net_t);
@@ -310,12 +310,12 @@ void OpenCL_Network<net_t>::forward(const std::vector<net_t>& input,
     //std::unique_lock<std::mutex> enqueue_lock(m_enqueue_mutex);
     enqueue_lock.unlock();
     //std::unique_lock<std::mutex> finish_lock(m_queue_finish_mutex);
-    enqueue_lock.lock();
+     enqueue_lock.lock();
     queue.finish();
     //finish_lock.unlock();
      enqueue_lock.unlock();
-
-    if (--m_occupied == 0) idle_count++;
+    
+    if (--m_occupied == 0) idle_count++; 
     cv.notify_all();
 
     auto polptr = static_cast<net_t*>(pinnedOutBufferHost_pol);
@@ -418,7 +418,7 @@ void OpenCL_Network<net_t>::convolve3(OpenCLContext & opencl_context,
                                   (n_ceil * ndimc) / nwg,
                                   cl::size_type(WINOGRAD_TILE)};
 
-	// tensorcore implementation uses a different dimension
+        // tensorcore implementation uses a different dimension
         if (tce) {
             local_sgemm = {32 * mdimc/mdima, ndimc/ndimb, 1};
             size_sgemm = {32 * m_ceil / mdima * mdimc / mwg,
@@ -436,7 +436,7 @@ void OpenCL_Network<net_t>::convolve3(OpenCLContext & opencl_context,
     try {
         if (fuse_in_transform) {
             // TODO : Eventually this might also be something tuneable?
-	    // Needs to match OUTIN_KWG in kernel
+            // Needs to match OUTIN_KWG in kernel
             constexpr auto dim_size = 2;
             out_transform_bn_in_kernel.setArg(0, bufferM);
             if (store_inout) {
@@ -494,14 +494,15 @@ void OpenCL_Network<net_t>::convolve3(OpenCLContext & opencl_context,
                 out_transform_bn_kernel.setArg(12, nullptr);
             }
 
-	    // Needs to match OUT_KWG, OUT_BWG in the kernel.
+            // Needs to match OUT_KWG, OUT_BWG in the kernel.
             // This could be tuned.
             cl::NDRange local_out = {32, 2};
+
             cl::NDRange global_out = {ceilMultiple(outputs, local_out[0]),
                                       ceilMultiple(tiles * batch_size, local_out[1])};
-            
-	    queue.enqueueNDRangeKernel(out_transform_bn_kernel, cl::NullRange,
-			               global_out,
+
+            queue.enqueueNDRangeKernel(out_transform_bn_kernel, cl::NullRange,
+                                       global_out,
                                        local_out);
         }
     } catch (const cl::Error &e) {
@@ -619,6 +620,7 @@ void OpenCL<net_t>::process_tuners(std::string tuners) {
     auto vwm = false;
     auto vwn = false;
     auto tce = false;
+
     while (ss >> buf) {
         found = buf.find("=");
         if (found == std::string::npos) {
@@ -639,7 +641,7 @@ void OpenCL<net_t>::process_tuners(std::string tuners) {
             m_sgemm_tuners.kwg = value;
             kwg = true;
         }
-	if (name == "-DMDIMA") {
+        if (name == "-DMDIMA") {
             m_sgemm_tuners.mdima = value;
             mdima = true;
         }
@@ -663,7 +665,7 @@ void OpenCL<net_t>::process_tuners(std::string tuners) {
             m_sgemm_tuners.vwn = value;
             vwn = true;
         }
-	if (name == "-DTCE") {
+        if (name == "-DTCE") {
             m_sgemm_tuners.tce = value;
             tce = true;
         }
@@ -679,7 +681,7 @@ void OpenCL<net_t>::process_tuners(std::string tuners) {
         if (!kwg) {
             std::cerr << " KWG";
         }
-	if (!mdima) {
+        if (!mdima) {
             std::cerr << " MDIMA";
         }
         if (!ndimb) {
@@ -697,7 +699,7 @@ void OpenCL<net_t>::process_tuners(std::string tuners) {
         if (!vwn) {
             std::cerr << " VWN";
         }
-	if (!tce) {
+        if (!tce) {
             std::cerr << " VWN";
         }
         std::cerr << std::endl;
@@ -799,7 +801,7 @@ OpenCL<net_t>::OpenCL(int gpu, bool silent) {
 
             bool preferred = (gpu == id);
 
-	    if (((this_score > best_score)
+            if (((this_score > best_score)
                  && (d.getInfo<CL_DEVICE_TYPE>() != CL_DEVICE_TYPE_CPU))
                 || preferred) {
                 best_version = opencl_version;
@@ -877,14 +879,17 @@ void OpenCL<net_t>::initialize(const int channels, int batch_size) {
     }
 
     auto t = Tuner<net_t>(*this, m_context, m_device);
+    if (m_tensorcore) {
+        t.enable_tensorcore();
+    }
+
     auto sgemm_tuners =
         t.load_sgemm_tuners(channels, batch_size * WINOGRAD_P, channels, WINOGRAD_TILE);
 
     // Some NVIDIA drivers are buggy and will fail to compile the rest of the
-    // and will fail to compile the rest of the kernels after a tuning
     // kernels after a tuning run.
     if (cfg_tune_only) {
-	// Originally this was an exit() but this will make the tuner
+        // Originally this was an exit() but this will make the tuner
         // only tune the first GPU.  Return instead.  Exit will be called
         // after all GPUs are created.
         return;

@@ -30,7 +30,6 @@
 #include "ThreadPool.h"
 extern int cfg_batch_size;
 
-
 template <typename net_t>
 class OpenCLScheduler : public ForwardPipe {
     class ContextPoolEntry {
@@ -88,11 +87,13 @@ private:
     //std::mutex m_mutex;
     std::condition_variable m_cv;
     //std::condition_variable m_cv0;
+
     // start with 10 milliseconds : lock protected
     int m_waittime{10};
     
     // set to true when single (non-batch) eval is in progress
     std::atomic<bool> m_single_eval_in_progress{false};
+
     std::list<std::shared_ptr<ForwardQueueEntry>> m_forward_queue;
     std::list<std::unique_ptr<ForwardQueueEntry0>> m_forward_queue0;
     std::atomic<int> m_max_queue_size;

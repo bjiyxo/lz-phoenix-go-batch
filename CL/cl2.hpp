@@ -2742,7 +2742,7 @@ public:
                     error = platforms[i].getDevices(type, &devices);
 
 #if defined(CL_HPP_ENABLE_EXCEPTIONS)
-		} catch (cl::Error& e) {
+                } catch (cl::Error& e) {
                     error = e.err();
                 }
     // Catch if exceptions are enabled as we don't want to exit if first platform has no devices of type
@@ -5926,12 +5926,12 @@ public:
                 )
             );
     }
-   
+    
     template<int index, int ArrayLength, class D, typename T0, typename T1, typename... Ts>
     void setSVMPointersHelper(std::array<void*, ArrayLength> &pointerList, const pointer<T0, D> &t0, const pointer<T1, D> &t1, Ts & ... ts)
     {
         pointerList[index] = static_cast<void*>(t0.get());
-	setSVMPointersHelper<index + 1, ArrayLength>(pointerList, t1, ts...);
+        setSVMPointersHelper<index + 1, ArrayLength>(pointerList, t1, ts...);
     }
 
     template<int index, int ArrayLength, typename T0, typename T1, typename... Ts>
@@ -5939,14 +5939,15 @@ public:
     setSVMPointersHelper(std::array<void*, ArrayLength> &pointerList, T0 t0, T1 t1, Ts... ts)
     {
         pointerList[index] = static_cast<void*>(t0);
-	setSVMPointersHelper<index + 1, ArrayLength>(pointerList, t1, ts...);
+        setSVMPointersHelper<index + 1, ArrayLength>(pointerList, t1, ts...);
     }
-    
+
     template<int index, int ArrayLength, typename T0, class D>
     void setSVMPointersHelper(std::array<void*, ArrayLength> &pointerList, const pointer<T0, D> &t0)
     {
         pointerList[index] = static_cast<void*>(t0.get());
     }
+
 
     template<int index, int ArrayLength, typename T0>
     typename std::enable_if<std::is_pointer<T0>::value, void>::type
@@ -7135,7 +7136,6 @@ public:
         return param;
     }
 
-#if CL_HPP_TARGET_OPENCL_VERSION >= 110
     cl_int enqueueReadBuffer(
         const Buffer& buffer,
         cl_bool blocking,
@@ -7209,7 +7209,7 @@ public:
 
         return err;
     }
-
+#if CL_HPP_TARGET_OPENCL_VERSION >= 110
     cl_int enqueueReadBufferRect(
         const Buffer& buffer,
         cl_bool blocking,

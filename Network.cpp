@@ -93,6 +93,7 @@ float Network::benchmark_time(int centiseconds) {
     // Isn't enough to guarantee correctness but better than nothing,
     // plus for large nets self-check takes a while (1~3 eval per second)
     get_output(&state, Ensemble::RANDOM_SYMMETRY, -1, true, true);
+
     const Time start;
     for (auto i = 0; i < cpus; i++) {
         tg.add_task([this, &runcount, start, centiseconds, state]() {
@@ -398,10 +399,10 @@ void Network::select_precision(int channels) {
         myprintf("Initializing OpenCL (autodetecting precision).\n");
 
         // Setup fp16 here so that we can see if we can skip autodetect.
-	// However, if fp16 sanity check fails we will return a fp32 and pray it works.
+        // However, if fp16 sanity check fails we will return a fp32 and pray it works.
         auto fp16_net = std::make_unique<OpenCLScheduler<half_float::half>>();
         if (!fp16_net->needs_autodetect()) {
-	    try {
+            try {
                 myprintf("OpenCL: using fp16/half compute support.\n");
                 m_forward = init_net(channels, std::move(fp16_net));
                 benchmark_time(1); // a sanity check run
@@ -582,6 +583,62 @@ void Network::initialize(int playouts, const std::string & weightsfile) {
     m_fwd_weights.reset();
 }
 
+
+void Network::show_heatmap(const FastState* const state,
+                           const Netresult& result,
+                           const bool topmoves) {
+    std::vector<std::string> display_map;
+    std::string line;
+
+    for (unsigned int y = 0; y < BOARD_SIZE; y++) {
+        for (unsigned int x = 0; x < BOARD_SIZE; x++) {
+            auto policy = 0;
+            const auto vertex = state->board.get_vertex(x, y);
+            if (state->board.get_state(vertex) == FastBoard::EMPTY) {
+                policy = result.policy[y * BOARD_SIZE + x] * 1000;
+            }
+
+            line += boost::str(boost::format("%3d ") % policy);
+        }
+
+        display_map.push_back(line);
+        line.clear();
+    }
+
+    for (int i = display_map.size() - 1; i >= 0; --i) {
+        myprintf("%s\n", display_map[i].c_str());
+    }
+    const auto pass_policy = int(result.policy_pass * 1000);
+    myprintf("pass: %d\n", pass_policy);
+    myprintf("winrate: %f\n", result.winrate);
+
+    if (topmoves) {
+        std::vector<Network::PolicyVertexPair> moves;
+        for (auto i=0; i < NUM_INTERSECTIONS; i++) {
+            const auto x = i % BOARD_SIZE;
+            const auto y = i / BOARD_SIZE;
+            const auto vertex = state->board.get_vertex(x, y);
+            if (state->board.get_state(vertex) == FastBoard::EMPTY) {
+                moves.emplace_back(result.policy[i], vertex);
+            }
+        }
+        moves.emplace_back(result.policy_pass, FastBoard::PASS);
+
+        std::stable_sort(rbegin(moves), rend(moves));
+
+        auto cum = 0.0f;
+        size_t tried = 0;
+        while (cum < 0.85f && tried < moves.size()) {
+            if (moves[tried].first < 0.01f) break;
+            myprintf("%1.3f (%s)\n",
+                    moves[tried].first,
+                    state->board.move_to_text(moves[tried].second).c_str());
+            cum += moves[tried].first;
+            tried++;
+        }
+    }
+}
+
 template<unsigned int inputs,
          unsigned int outputs,
          bool ReLU,
@@ -743,7 +800,9 @@ bool Network::probe_cache(const GameState* const state,
     return false;
 }
 */
+
 std::pair<Netresult_ptr, int> Network::probe_cache0(const GameState* const state) {
+
     for (auto sym = 0; sym < Network::NUM_SYMMETRIES; ++sym) {
         if (sym == Network::IDENTITY_SYMMETRY) {
             continue;
@@ -756,6 +815,7 @@ std::pair<Netresult_ptr, int> Network::probe_cache0(const GameState* const state
     }
     return std::pair<Netresult_ptr, int>(nullptr, Network::IDENTITY_SYMMETRY);
 }
+
 std::pair<Netresult_ptr, int> Network::get_output0(
     const GameState* const state, const Ensemble ensemble,
     const int symmetry, const bool skip_cache) {
@@ -802,6 +862,7 @@ std::pair<Netresult_ptr, int> Network::get_output0(
                 tmpresult.winrate / static_cast<float>(NUM_SYMMETRIES);
             result.policy_pass +=
                 tmpresult.policy_pass / static_cast<float>(NUM_SYMMETRIES);
+
             for (auto idx = size_t{ 0 }; idx < NUM_INTERSECTIONS; idx++) {
                 result.policy[idx] +=
                     tmpresult.policy[idx] / static_cast<float>(NUM_SYMMETRIES);
@@ -838,14 +899,15 @@ Network::Netresult Network::get_output(
     if (state->board.get_boardsize() != BOARD_SIZE) {
         return result;
     }
-/*
+
+    /*
     if (!skip_cache) {
         // See if we already have this in the cache.
         if (probe_cache(state, result)) {
             return result;
         }
     }
-*/
+    */
 
     if (ensemble == DIRECT) {
         assert(symmetry >= 0 && symmetry < NUM_SYMMETRIES);
@@ -906,32 +968,37 @@ void Network::process_output(
     // Get the moves
     batchnorm<NUM_INTERSECTIONS>(OUTPUTS_POLICY, policy_data,
         m_bn_pol_w1.data(), m_bn_pol_w2.data(),
-	m_bn_pol_gamma.data(), m_bn_pol_beta.data());
+        m_bn_pol_gamma.data(), m_bn_pol_beta.data());
     const auto policy_out =
         innerproduct<OUTPUTS_POLICY * NUM_INTERSECTIONS, POTENTIAL_MOVES, false>(
             policy_data, m_ip_pol_w, m_ip_pol_b);
     const auto outputs = softmax(policy_out, cfg_softmax_temp);
+
     // Now get the value
     batchnorm<NUM_INTERSECTIONS>(OUTPUTS_VALUE, value_data,
         m_bn_val_w1.data(), m_bn_val_w2.data(),
-	m_bn_val_gamma.data(), m_bn_val_beta.data());
+        m_bn_val_gamma.data(), m_bn_val_beta.data());
     const auto winrate_data =
         innerproduct<OUTPUTS_VALUE * NUM_INTERSECTIONS, VALUE_LAYER, true>(
             value_data, m_ip1_val_w, m_ip1_val_b);
     const auto winrate_out =
         innerproduct<VALUE_LAYER, 1, false>(winrate_data, m_ip2_val_w, m_ip2_val_b);
+
     // Map TanH output range [-1..1] to [0..1] range
     auto winrate = (1.0f + std::tanh(winrate_out[0])) / 2.0f;
+
     for (auto idx = size_t{ 0 }; idx < NUM_INTERSECTIONS; idx++) {
         const auto sym_idx = symmetry_nn_idx_table[symmetry][idx];
         result->result.policy[sym_idx] = outputs[idx];
     }
+
     // v2 format (ELF Open Go) returns black value, not stm
     if (m_value_head_not_stm) {
         if (tomove == FastBoard::WHITE) {
             winrate = 1.0f - winrate;
         }
     }
+
     result->result.policy_pass = outputs[NUM_INTERSECTIONS];
     result->result.winrate = winrate;
     result->ready.store(true);
@@ -993,61 +1060,6 @@ Network::Netresult Network::get_output_internal(
     result.winrate = winrate;
 
     return result;
-}
-
-void Network::show_heatmap(const FastState* const state,
-                           const Netresult& result,
-                           const bool topmoves) {
-    std::vector<std::string> display_map;
-    std::string line;
-
-    for (unsigned int y = 0; y < BOARD_SIZE; y++) {
-        for (unsigned int x = 0; x < BOARD_SIZE; x++) {
-            auto policy = 0;
-            const auto vertex = state->board.get_vertex(x, y);
-            if (state->board.get_state(vertex) == FastBoard::EMPTY) {
-                policy = result.policy[y * BOARD_SIZE + x] * 1000;
-            }
-
-            line += boost::str(boost::format("%3d ") % policy);
-        }
-
-        display_map.push_back(line);
-        line.clear();
-    }
-
-    for (int i = display_map.size() - 1; i >= 0; --i) {
-        myprintf("%s\n", display_map[i].c_str());
-    }
-    const auto pass_policy = int(result.policy_pass * 1000);
-    myprintf("pass: %d\n", pass_policy);
-    myprintf("winrate: %f\n", result.winrate);
-
-    if (topmoves) {
-        std::vector<Network::PolicyVertexPair> moves;
-        for (auto i=0; i < NUM_INTERSECTIONS; i++) {
-            const auto x = i % BOARD_SIZE;
-            const auto y = i / BOARD_SIZE;
-            const auto vertex = state->board.get_vertex(x, y);
-            if (state->board.get_state(vertex) == FastBoard::EMPTY) {
-                moves.emplace_back(result.policy[i], vertex);
-            }
-        }
-        moves.emplace_back(result.policy_pass, FastBoard::PASS);
-
-        std::stable_sort(rbegin(moves), rend(moves));
-
-        auto cum = 0.0f;
-        size_t tried = 0;
-        while (cum < 0.85f && tried < moves.size()) {
-            if (moves[tried].first < 0.01f) break;
-            myprintf("%1.3f (%s)\n",
-                    moves[tried].first,
-                    state->board.move_to_text(moves[tried].second).c_str());
-            cum += moves[tried].first;
-            tried++;
-        }
-    }
 }
 
 void Network::fill_input_plane_pair(const FullBoard& board,

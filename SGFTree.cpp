@@ -47,7 +47,7 @@ void SGFTree::init_state() {
     m_state.init_game(std::min(BOARD_SIZE, 19), 7.5f);
 }
 
-const KoState * SGFTree::get_state(void) const{
+const KoState * SGFTree::get_state(void) const {
     assert(m_initialized);
     return &m_state;
 }
@@ -64,7 +64,7 @@ const SGFTree * SGFTree::get_child(size_t count) const {
 // This follows the entire line, and doesn't really need the intermediate
 // states, just the moves. As a consequence, states that contain more than
 // just moves won't have any effect.
-GameState SGFTree::follow_mainline_state(unsigned int movenum) const{
+GameState SGFTree::follow_mainline_state(unsigned int movenum) const {
     const auto* link = this;
     // This initializes a starting state from a KoState and
     // sets up the game history.

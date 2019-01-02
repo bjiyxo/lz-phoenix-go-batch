@@ -86,7 +86,9 @@ static std::mutex IOmutex;
 static void myprintf_base(const char *fmt, va_list ap) {
     va_list ap2;
     va_copy(ap2, ap);
+
     vfprintf(stderr, fmt, ap);
+
     if (cfg_logfile_handle) {
         std::lock_guard<std::mutex> lock(IOmutex);
         vfprintf(cfg_logfile_handle, fmt, ap2);
@@ -106,13 +108,9 @@ void Utils::myprintf(const char *fmt, ...) {
 }
 
 void Utils::myprintf_error(const char *fmt, ...) {
-        std::lock_guard<std::mutex> lock(IOmutex);
     va_list ap;
-        va_start(ap, fmt);
     va_start(ap, fmt);
-        vfprintf(cfg_logfile_handle, fmt, ap);
     myprintf_base(fmt, ap);
-        va_end(ap);
     va_end(ap);
 }
 
