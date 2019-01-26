@@ -26,7 +26,6 @@
 #include <memory>
 #include <type_traits>
 #include <algorithm>
-#include <boost/format.hpp>
 
 #include "FastBoard.h"
 #include "FastState.h"

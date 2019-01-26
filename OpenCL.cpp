@@ -174,9 +174,6 @@ void OpenCL_Network<net_t>::forward(const std::vector<net_t>& input,
         opencl_context.m_inBuffer2 = cl::Buffer(
             m_opencl.m_context,
             CL_MEM_READ_WRITE, alloc_inSize);
-        opencl_context.m_inBufferNoBN = cl::Buffer(
-            m_opencl.m_context,
-            CL_MEM_READ_WRITE, alloc_inSize);
         opencl_context.m_VBuffer = cl::Buffer(
             m_opencl.m_context,
             CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS | CL_MEM_COPY_HOST_PTR,
@@ -197,7 +194,6 @@ void OpenCL_Network<net_t>::forward(const std::vector<net_t>& input,
 
     cl::Buffer & inBuffer = opencl_context.m_inBuffer;
     cl::Buffer & inBuffer2 = opencl_context.m_inBuffer2;
-    cl::Buffer & inBufferNoBN = opencl_context.m_inBufferNoBN;
     cl::Buffer & VBuffer = opencl_context.m_VBuffer;
     cl::Buffer & MBuffer = opencl_context.m_MBuffer;
     cl::CommandQueue & queue = opencl_context.m_commandqueue;
@@ -231,7 +227,6 @@ void OpenCL_Network<net_t>::forward(const std::vector<net_t>& input,
                      layer.outputs,
                      inBuffer,
                      inBuffer,
-                     &inBufferNoBN,
                      VBuffer,
                      MBuffer,
                      conv_weights,
@@ -246,14 +241,13 @@ void OpenCL_Network<net_t>::forward(const std::vector<net_t>& input,
             assert(niter != cend(m_layers));
             auto conv1_weights = begin(layer.weights);
             auto bn1_weights   = begin(layer.weights) + 1;
-            auto conv2_weights = begin(layer.weights) + 6;
-            auto bn2_weights   = begin(layer.weights) + 7;
+            auto conv2_weights = begin(layer.weights) + 3;
+            auto bn2_weights   = begin(layer.weights) + 4;
             convolve3(opencl_context,
                       layer.channels,
                       layer.outputs,
                       inBuffer,
                       inBuffer2,
-                      nullptr,
                       VBuffer,
                       MBuffer,
                       conv1_weights,
@@ -271,11 +265,10 @@ void OpenCL_Network<net_t>::forward(const std::vector<net_t>& input,
                       layer.outputs,
                       inBuffer2,
                       inBuffer,
-                      &inBufferNoBN,
                       VBuffer,
                       MBuffer,
                       conv2_weights,
-                      &inBufferNoBN,
+                      &inBuffer,
                       bn2_weights,
                       use_inout, skip_next_in_trans, true,
                       batch_size);
@@ -335,7 +328,6 @@ void OpenCL_Network<net_t>::convolve3(OpenCLContext & opencl_context,
                               int channels, int outputs,
                               cl::Buffer& bufferIn,
                               cl::Buffer& bufferOut,
-                              cl::Buffer* bufferOutNoBN,
                               cl::Buffer& bufferV,
                               cl::Buffer& bufferM,
                               weight_slice_t weights,
@@ -458,14 +450,6 @@ void OpenCL_Network<net_t>::convolve3(OpenCLContext & opencl_context,
             }
             out_transform_bn_in_kernel.setArg(8, bn_weights[0]);
             out_transform_bn_in_kernel.setArg(9, bn_weights[1]);
-            out_transform_bn_in_kernel.setArg(10, bn_weights[2]);
-            out_transform_bn_in_kernel.setArg(11, bn_weights[3]);
-            out_transform_bn_in_kernel.setArg(12, bn_weights[4]);
-            if (bufferOutNoBN) {
-                out_transform_bn_in_kernel.setArg(13, *bufferOutNoBN);
-            } else {
-                out_transform_bn_in_kernel.setArg(13, nullptr);
-            }
 
             queue.enqueueNDRangeKernel(out_transform_bn_in_kernel,
                                        cl::NullRange,
@@ -485,14 +469,6 @@ void OpenCL_Network<net_t>::convolve3(OpenCLContext & opencl_context,
             }
             out_transform_bn_kernel.setArg(7, bn_weights[0]);
             out_transform_bn_kernel.setArg(8, bn_weights[1]);
-            out_transform_bn_kernel.setArg(9, bn_weights[2]);
-            out_transform_bn_kernel.setArg(10, bn_weights[3]);
-            out_transform_bn_kernel.setArg(11, bn_weights[4]);
-            if (bufferOutNoBN) {
-                out_transform_bn_kernel.setArg(12, *bufferOutNoBN);
-            } else {
-                out_transform_bn_kernel.setArg(12, nullptr);
-            }
 
             // Needs to match OUT_KWG, OUT_BWG in the kernel.
             // This could be tuned.

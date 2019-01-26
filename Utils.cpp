@@ -22,8 +22,7 @@
 #include <mutex>
 #include <cstdarg>
 #include <cstdio>
-#include <cmath>
-#include <boost/format.hpp>
+
 #include <boost/filesystem.hpp>
 
 #ifdef _WIN32
